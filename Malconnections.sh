@@ -5,6 +5,12 @@ TMPDIR=$(mktemp -d)
 SEEN="$TMPDIR/seen"
 LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 
+# --- Terminal Colors ---
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
 echo "Logging to: $LOGFILE"
 touch "$SEEN"
 
@@ -21,6 +27,7 @@ fi
 # --- Monitor Loop ---
 while true; do
     timestamp=$(date '+[%F %T]')
+    echo -e "${GREEN}$timestamp Checking outbound connections...${NC}"
     echo "$timestamp Checking outbound connections..." >> "$LOGFILE"
 
     # --- Stealth Connection Check ---
@@ -30,6 +37,7 @@ while true; do
         echo "No stealth connections detected." >> "$LOGFILE"
     else
         echo "$stealth" >> "$LOGFILE"
+        echo -e "${RED}[ALERT] Stealth connection detected!${NC}"
     fi
 
     # --- Suspicious PHP Socket Activity ---
@@ -43,14 +51,21 @@ while true; do
         echo -e "No suspicious PHP socket activity detected.\n" >> "$LOGFILE"
     else
         echo "$suspicious" >> "$LOGFILE"
+        echo -e "${YELLOW}[Warning] Suspicious PHP socket activity detected!${NC}"
     fi
 
     # --- Outbound TCP Connection State Monitoring ---
     echo -e "\n$timestamp Outbound TCP connection states:" >> "$LOGFILE"
+    close_wait_count=$(sudo ss -pnto state close-wait 2>/dev/null | grep -c ':80$\|:443$')
     sudo ss -pnto state established,close-wait,last-ack 2>/dev/null | awk '
     $5 ~ /:80$|:443$/ {
         print $1
     }' | sort | uniq -c | sort -rnk1,1 >> "$LOGFILE"
+
+  # Alert if too many CLOSE-WAITs
+    if [[ $close_wait_count -gt 100 ]]; then
+        echo -e "${RED}[ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
+    fi
 
      # --- Suspicious PHP Child Process Check ---
     echo -e "\n$timestamp Suspicious PHP child process check:" >> "$LOGFILE"
@@ -60,6 +75,7 @@ while true; do
             cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
             if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) ]]; then
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
+                echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
             fi
         done
     done
