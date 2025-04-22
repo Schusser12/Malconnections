@@ -1,21 +1,39 @@
 # 🕵️ Outbound Connection & PHP Activity Monitor
 
-A simple bash-based monitoring script to log outbound network activity from processes, with a focus on PHP-based behaviors. Useful for detecting potential web shell activity, suspicious connections, or early signs of compromise on a Linux server.
+A lightweight Bash-based monitoring script that watches for suspicious outbound activity on Linux servers — with a special focus on PHP-related behaviors often linked to web shells, malware, or unauthorized tools.
 
 ---
 
 ## 🔧 What It Does
 
-- Monitors **established outbound connections** on ports `80` and `443`
+- Monitors **outbound TCP connections** (ports 80 and 443)
 - Logs the following for **new processes**:
-  - PID, user, command line, working directory
+  - PID, user, command line, current working directory (CWD), and executable path
   - Any `.php` files opened by the process
-- Skips trusted users like `root` and `aakore`
-- Checks for:
-  - **Stealth connections** (`netstat | grep stealth`)
-  - **PHP socket connections** to suspicious ports
-  - **Recent Maldet scan activity** (only once at startup)
-- Logs everything to a unique file inside a temporary directory
+- Skips trusted users (e.g., `root`, `aakore`)
+- Skips trusted processes (e.g., `nginx`, `filebeat`, etc.)
+- Detects and alerts on:
+  - Direct IP connections (bypassing DNS)
+  - Suspicious PHP socket activity
+  - PHP scripts executing from `/tmp` or `/dev/shm`
+  - Use of dangerous PHP functions (`system`, `exec`, `popen`, etc.)
+  - PHP processes calling tools like `curl`, `wget`, `python`, etc.
+  - PHP outbound DNS activity
+  - Excessive CLOSE-WAIT socket states
+- Performs a **one-time Maldet scan log check** at startup
+- Gracefully handles `CTRL+C` to show an alert summary
+
+---
+
+## 📁 Files Created (Per Session)
+
+All stored inside a temporary directory (`/tmp/...`):
+
+| File                    | Description                                      |
+|-------------------------|--------------------------------------------------|
+| `alerts-summary.log`    | All triggered alerts from this session           |
+| `outbound-YYYY-MM-DD.log` | Full log with timestamped activity & connections |
+| `seen`                  | Tracks which PIDs have already been analyzed     |
 
 ---
 
@@ -37,3 +55,11 @@ Cmdline: /usr/bin/php -f /var/www/html/index.php
 CWD: /var/www/html
 Open .php files:
 /var/www/html/index.php
+---
+
+## 🚀 Usage
+
+Start the script:
+
+```bash
+bash Malconnections.sh
