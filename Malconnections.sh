@@ -5,12 +5,16 @@ TMPDIR=$(mktemp -d)
 SEEN="$TMPDIR/seen"
 LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 ALERTS_FILE="$TMPDIR/alerts-summary.log"
+START_TIME=$(date +%s)
 
 # --- Terminal Colors ---
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
+
+# --- List of suspicious binaries and HTTP clients to monitor for ---
+SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 
 # --- Manual report mode ---
 if [[ "$1" == "--report" ]]; then
@@ -29,6 +33,16 @@ trap cleanup EXIT
 
 cleanup() {
     echo -e "\n${YELLOW}Script interrupted. Showing alert summary...${NC}"
+    echo -e "${YELLOW}Session ended at: $(date '+%F %T')${NC}"
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    HOURS=$((DURATION / 3600))
+    MINUTES=$(( (DURATION % 3600) / 60 ))
+    SECONDS=$((DURATION % 60))
+
+    echo -e "${YELLOW}Session duration: ${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
+
     if [[ -s "$ALERTS_FILE" ]]; then
         echo -e "\n${RED}--- Potential Threats Found ---${NC}"
         cat "$ALERTS_FILE"
@@ -127,7 +141,7 @@ while true; do
             fi
 
             # --- Detect use of suspicious binaries ---
-            if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
+            if [[ "$cmd" =~ $SUSPICIOUS_TOOLS && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
                 echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
                 echo "$timestamp [ALERT] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
@@ -158,7 +172,8 @@ while true; do
         echo -n "Cmdline: " >> "$LOGFILE"
         tr '\0' ' ' < /proc/$pid/cmdline >> "$LOGFILE"
         echo -e "\nCWD: $(readlink /proc/$pid/cwd 2>/dev/null)" >> "$LOGFILE"
-
+        echo -e "EXE: $(readlink /proc/$pid/exe 2>/dev/null)" >> "$LOGFILE"
+        
         php_files=$(sudo lsof -p "$pid" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
         if [[ -n "$php_files" ]]; then
             echo "Open .php files:" >> "$LOGFILE"
@@ -172,6 +187,45 @@ while true; do
             if (a[1]) print a[1]
         }' | sort -u
     )
+
+# --- Direct IP Connection Detection ---
+echo -e "\n$timestamp Direct IP connection detection:" >> "$LOGFILE"
+while read -r line; do
+    remote=$(echo "$line" | awk '{print $5}')
+    pidinfo=$(echo "$line" | awk '{print $6}')
+
+    # Extract IP (before :port)
+    ip="${remote%:*}"
+
+    # Skip local/private IPs
+    if [[ "$ip" =~ ^127\. ]] || [[ "$ip" =~ ^10\. ]] || [[ "$ip" =~ ^192\.168\. ]] || [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+        continue
+    fi
+
+    # Only alert if remote is a raw IP
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        # Extract PID cleanly
+        if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
+            pid="${BASH_REMATCH[1]}"
+
+            # Look for open PHP files for that PID
+            php_files=$(sudo lsof -p "$pid" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
+
+            if [[ -n "$php_files" ]]; then
+                echo "[ALERT] Direct IP connection detected: $ip by PID $pid (PHP files: $php_files)" | tee -a "$LOGFILE"
+                echo "$timestamp [ALERT] Direct IP connection detected: $ip by PID $pid (PHP files: $php_files)" >> "$ALERTS_FILE"
+            else
+                echo "[ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" | tee -a "$LOGFILE"
+                echo "$timestamp [ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" >> "$ALERTS_FILE"
+            fi
+        else
+            echo "[ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" | tee -a "$LOGFILE"
+            echo "$timestamp [ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" >> "$ALERTS_FILE"
+        fi
+    fi
+done < <(
+    sudo ss -ntp 2>/dev/null | grep ESTAB
+)
 
     # --- Pause before next check ---
     sleep 2
