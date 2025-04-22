@@ -6,6 +6,24 @@ SEEN="$TMPDIR/seen"
 LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 ALERTS_FILE="$TMPDIR/alerts-summary.log"
 
+# --- Terminal Colors ---
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+# --- Manual report mode ---
+if [[ "$1" == "--report" ]]; then
+    if [[ -s "$ALERTS_FILE" ]]; then
+        echo -e "\n${RED}--- Potential Threats Found ---${NC}"
+        cat "$ALERTS_FILE"
+        echo -e "${RED}--- End of Alert Summary ---${NC}\n"
+    else
+        echo -e "\n${GREEN}No alerts recorded during this session.${NC}\n"
+    fi
+    exit 0
+fi
+
 # --- Handle CTRL+C to print summary ---
 trap cleanup EXIT
 
@@ -19,12 +37,6 @@ cleanup() {
         echo -e "\n${GREEN}No alerts recorded during this session.${NC}\n"
     fi
 }
-
-# --- Terminal Colors ---
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-NC='\033[0m' # No Color
 
 echo "Logging to: $LOGFILE"
 touch "$SEEN"
