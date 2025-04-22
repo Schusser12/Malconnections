@@ -48,7 +48,7 @@ while true; do
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
     if [[ -z "$suspicious" ]]; then
-        echo -e "No suspicious PHP socket activity detected.\n" >> "$LOGFILE"
+        echo -e "No suspicious PHP socket activity detected." >> "$LOGFILE"
     else
         echo "$suspicious" >> "$LOGFILE"
         echo -e "${YELLOW}[Warning] Suspicious PHP socket activity detected!${NC}"
