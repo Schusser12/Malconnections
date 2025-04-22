@@ -73,7 +73,7 @@ while true; do
         children=$(pgrep -P "$pid")
         for child in $children; do
             cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
-            if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) ]]; then
+            if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) && ! "$cmd" =~ bin/magento ]]; then
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
                 echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
             fi
