@@ -55,7 +55,7 @@ Cmdline: /usr/bin/php -f /var/www/html/index.php
 CWD: /var/www/html
 Open .php files:
 /var/www/html/index.php
----
+```
 
 ## 🚀 Usage
 
