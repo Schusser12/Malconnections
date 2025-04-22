@@ -213,6 +213,7 @@ while read -r line; do
 
             # Find process name
             pname=$(ps -p "$pid" -o comm= 2>/dev/null)
+            pname=${pname:-unknown}
 
             # Skip if it's a known safe process
             if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
