@@ -120,14 +120,14 @@ while true; do
             cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
 
             # --- Detect use of suspicious PHP functions ---
-            if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento ]]; then
+            if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
                 echo "$timestamp [WARNING] PHP child process using suspicious function: $cmd" >> "$LOGFILE"
                 echo -e "${RED}[ALERT] PHP suspicious function call: ${cmd}${NC}"
                 echo "$timestamp [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
             fi
 
             # --- Detect use of suspicious binaries ---
-            if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) && ! "$cmd" =~ bin/magento ]]; then
+            if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
                 echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
                 echo "$timestamp [ALERT] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
