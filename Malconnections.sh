@@ -57,30 +57,60 @@ while true; do
     # --- Outbound TCP Connection State Monitoring ---
     echo -e "\n$timestamp Outbound TCP connection states:" >> "$LOGFILE"
     close_wait_count=$(sudo ss -pnto state close-wait 2>/dev/null | grep -c ':80$\|:443$')
-    sudo ss -pnto state established,close-wait,last-ack 2>/dev/null | awk '
-    $5 ~ /:80$|:443$/ {
-        print $1
-    }' | sort | uniq -c | sort -rnk1,1 >> "$LOGFILE"
 
-  # Alert if too many CLOSE-WAITs
+    sudo ss -pnto state established,close-wait,last-ack 2>/dev/null | awk '
+        $5 ~ /:80$|:443$/ {
+            print $1
+        }
+    ' | sort | uniq -c | sort -rnk1,1 >> "$LOGFILE"
+
+    # --- Alert if too many CLOSE-WAITs ---
     if [[ $close_wait_count -gt 100 ]]; then
         echo -e "${RED}[ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
     fi
 
-     # --- Suspicious PHP Child Process Check ---
+    # --- PHP Outbound DNS Query Check ---
+   echo -e "\n$timestamp PHP outbound DNS query check:" >> "$LOGFILE"
+   php_dns=$(sudo ss -uap | grep '[p]hp' | grep ':53')
+
+   if [[ -n "$php_dns" ]]; then
+     echo "$timestamp [ALERT] PHP process making outbound DNS queries detected:" >> "$LOGFILE"
+     echo "$php_dns" >> "$LOGFILE"
+     echo -e "${RED}[ALERT] PHP outbound DNS detected!${NC}"
+   else
+     echo "No PHP DNS queries detected." >> "$LOGFILE"
+   fi
+    
+    # --- Suspicious PHP Child Process Check ---
     echo -e "\n$timestamp Suspicious PHP child process check:" >> "$LOGFILE"
     for pid in $(ps faux | egrep '[p]hp' | awk '{print $2}'); do
         children=$(pgrep -P "$pid")
         for child in $children; do
             cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
+
+            # --- Detect use of suspicious PHP functions ---
+            if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento ]]; then
+                echo "$timestamp [WARNING] PHP child process using suspicious function: $cmd" >> "$LOGFILE"
+                echo -e "${RED}[ALERT] PHP suspicious function call: ${cmd}${NC}"
+            fi
+
+            # --- Detect use of suspicious binaries ---
             if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) && ! "$cmd" =~ bin/magento ]]; then
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
                 echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
             fi
+
+            # --- Detect PHP scripts running from /tmp or /dev/shm ---
+            php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
+            if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
+                echo "$timestamp [ALERT] PHP script running from temp folder: $php_files" >> "$LOGFILE"
+                echo -e "${RED}[ALERT] PHP running from temp directory!${NC}"
+            fi
         done
     done
 
-    # --- Outbound Connection Scanning for New PIDs --
+    # --- Outbound Connection Scanning for New PIDs ---
+    echo -e "\n$timestamp Outbound connection scanning for new PIDs:" >> "$LOGFILE"
     while read -r pid; do
         [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
         user=$(ps -o user= -p "$pid" 2>/dev/null)
@@ -109,6 +139,6 @@ while true; do
         }' | sort -u
     )
 
-    # --- Pause ---
+    # --- Pause before next check ---
     sleep 2
 done
