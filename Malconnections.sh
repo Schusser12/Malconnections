@@ -4,6 +4,7 @@
 TMPDIR=$(mktemp -d)
 SEEN="$TMPDIR/seen"
 LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
+ALERTS_FILE="$TMPDIR/alerts-summary.log"
 
 # --- Terminal Colors ---
 RED='\033[0;31m'
@@ -13,6 +14,7 @@ NC='\033[0m' # No Color
 
 echo "Logging to: $LOGFILE"
 touch "$SEEN"
+touch "$ALERTS_FILE"
 
 # --- Initial Maldet Report (runs once) ---
 timestamp=$(date '+[%F %T]')
@@ -38,6 +40,7 @@ while true; do
     else
         echo "$stealth" >> "$LOGFILE"
         echo -e "${RED}[ALERT] Stealth connection detected!${NC}"
+        echo "$timestamp [ALERT] Stealth connection detected!" >> "$ALERTS_FILE"
     fi
 
     # --- Suspicious PHP Socket Activity ---
@@ -48,16 +51,16 @@ while true; do
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
     if [[ -z "$suspicious" ]]; then
-        echo -e "No suspicious PHP socket activity detected." >> "$LOGFILE"
+        echo "No suspicious PHP socket activity detected." >> "$LOGFILE"
     else
         echo "$suspicious" >> "$LOGFILE"
         echo -e "${YELLOW}[Warning] Suspicious PHP socket activity detected!${NC}"
+        echo "$timestamp [ALERT] Suspicious PHP socket activity detected!" >> "$ALERTS_FILE"
     fi
 
     # --- Outbound TCP Connection State Monitoring ---
     echo -e "\n$timestamp Outbound TCP connection states:" >> "$LOGFILE"
     close_wait_count=$(sudo ss -pnto state close-wait 2>/dev/null | grep -c ':80$\|:443$')
-
     sudo ss -pnto state established,close-wait,last-ack 2>/dev/null | awk '
         $5 ~ /:80$|:443$/ {
             print $1
@@ -67,42 +70,41 @@ while true; do
     # --- Alert if too many CLOSE-WAITs ---
     if [[ $close_wait_count -gt 100 ]]; then
         echo -e "${RED}[ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
+        echo "$timestamp [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)" >> "$ALERTS_FILE"
     fi
 
     # --- PHP Outbound DNS Query Check ---
-   echo -e "\n$timestamp PHP outbound DNS query check:" >> "$LOGFILE"
-   php_dns=$(sudo ss -uap | grep '[p]hp' | grep ':53')
+    echo -e "\n$timestamp PHP outbound DNS query check:" >> "$LOGFILE"
+    php_dns=$(sudo ss -uap | grep '[p]hp' | grep ':53')
+    if [[ -n "$php_dns" ]]; then
+        echo "$timestamp [ALERT] PHP process making outbound DNS queries detected:" >> "$LOGFILE"
+        echo "$php_dns" >> "$LOGFILE"
+        echo -e "${RED}[ALERT] PHP outbound DNS detected!${NC}"
+        echo "$timestamp [ALERT] PHP outbound DNS query detected!" >> "$ALERTS_FILE"
+    else
+        echo "No PHP DNS queries detected." >> "$LOGFILE"
+    fi
 
-   if [[ -n "$php_dns" ]]; then
-     echo "$timestamp [ALERT] PHP process making outbound DNS queries detected:" >> "$LOGFILE"
-     echo "$php_dns" >> "$LOGFILE"
-     echo -e "${RED}[ALERT] PHP outbound DNS detected!${NC}"
-   else
-     echo "No PHP DNS queries detected." >> "$LOGFILE"
-   fi
-    
     # --- Suspicious PHP Child Process Check ---
     echo -e "\n$timestamp Suspicious PHP child process check:" >> "$LOGFILE"
     for pid in $(ps faux | egrep '[p]hp' | awk '{print $2}'); do
         children=$(pgrep -P "$pid")
-        
         for child in $children; do
-         if [[ -f "/proc/$child/cmdline" ]]; then
+            [[ ! -f "/proc/$child/cmdline" ]] && continue
             cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
-        else
-            continue
-        fi
 
             # --- Detect use of suspicious PHP functions ---
             if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento ]]; then
                 echo "$timestamp [WARNING] PHP child process using suspicious function: $cmd" >> "$LOGFILE"
                 echo -e "${RED}[ALERT] PHP suspicious function call: ${cmd}${NC}"
+                echo "$timestamp [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
             fi
 
             # --- Detect use of suspicious binaries ---
             if [[ "$cmd" =~ (curl|wget|perl|python|bash|sh) && ! "$cmd" =~ bin/magento ]]; then
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
                 echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
+                echo "$timestamp [ALERT] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
             fi
 
             # --- Detect PHP scripts running from /tmp or /dev/shm ---
@@ -110,6 +112,7 @@ while true; do
             if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
                 echo "$timestamp [ALERT] PHP script running from temp folder: $php_files" >> "$LOGFILE"
                 echo -e "${RED}[ALERT] PHP running from temp directory!${NC}"
+                echo "$timestamp [ALERT] PHP running from temp directory: $php_files" >> "$ALERTS_FILE"
             fi
         done
     done
