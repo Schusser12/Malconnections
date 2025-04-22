@@ -85,8 +85,13 @@ while true; do
     echo -e "\n$timestamp Suspicious PHP child process check:" >> "$LOGFILE"
     for pid in $(ps faux | egrep '[p]hp' | awk '{print $2}'); do
         children=$(pgrep -P "$pid")
+        
         for child in $children; do
+         if [[ -f "/proc/$child/cmdline" ]]; then
             cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
+        else
+            continue
+        fi
 
             # --- Detect use of suspicious PHP functions ---
             if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento ]]; then
