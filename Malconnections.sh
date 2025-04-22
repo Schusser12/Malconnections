@@ -16,6 +16,9 @@ NC='\033[0m' # No Color
 # --- List of suspicious binaries and HTTP clients to monitor for ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 
+# --- List of known safe processes to ignore for direct IP detection ---
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be"
+
 # --- Manual report mode ---
 if [[ "$1" == "--report" ]]; then
     if [[ -s "$ALERTS_FILE" ]]; then
@@ -208,6 +211,14 @@ while read -r line; do
         if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
             pid="${BASH_REMATCH[1]}"
 
+            # Find process name
+            pname=$(ps -p "$pid" -o comm= 2>/dev/null)
+
+            # Skip if it's a known safe process
+            if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
+                continue
+            fi
+
             # Look for open PHP files for that PID
             php_files=$(sudo lsof -p "$pid" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
 
@@ -215,8 +226,8 @@ while read -r line; do
                 echo "[ALERT] Direct IP connection detected: $ip by PID $pid (PHP files: $php_files)" | tee -a "$LOGFILE"
                 echo "$timestamp [ALERT] Direct IP connection detected: $ip by PID $pid (PHP files: $php_files)" >> "$ALERTS_FILE"
             else
-                echo "[ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" | tee -a "$LOGFILE"
-                echo "$timestamp [ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" >> "$ALERTS_FILE"
+                echo "[ALERT] Direct IP connection detected: $ip (Process: $pname PID $pid)" | tee -a "$LOGFILE"
+                echo "$timestamp [ALERT] Direct IP connection detected: $ip (Process: $pname PID $pid)" >> "$ALERTS_FILE"
             fi
         else
             echo "[ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" | tee -a "$LOGFILE"
