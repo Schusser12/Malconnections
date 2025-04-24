@@ -62,7 +62,7 @@ touch "$ALERTS_FILE"
 # --- Initial Maldet Report (runs once) ---
 timestamp=$(date '+[%F %T]')
 echo -e "\n$timestamp Recent Maldet scan results:" >> "$LOGFILE"
-maldet=$(egrep "(scan completed on|scan report saved)" /usr/local/maldetect/logs/event_log 2>/dev/null | egrep "$(date +'%b %d %Y')|$(date -d 'yesterday' +'%b %d %Y')")
+maldet=$(grep -E "(scan completed on|scan report saved)" /usr/local/maldetect/logs/event_log 2>/dev/null | grep -E "$(date +'%b %d %Y')|$(date -d 'yesterday' +'%b %d %Y')")
 if [[ -z "$maldet" ]]; then
     echo -e "No Maldet scan activity found for today or yesterday.\n" >> "$LOGFILE"
 else
@@ -90,7 +90,7 @@ while true; do
     echo -e "\n$timestamp Suspicious PHP socket activity check:" >> "$LOGFILE"
     suspicious=""
     for ps in $(ps faux | egrep 'php' | awk '{print $2}' | grep -v PID); do
-        output=$(sudo lsof -p "$ps" 2>/dev/null | egrep -i 'tcp|udp' | egrep "$(hostname)\.[0-9]")
+        output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "$(hostname)\.[0-9]")
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
     if [[ -z "$suspicious" ]]; then
