@@ -31,6 +31,9 @@ STANDALONE_PHP_FILES=0
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
 
+# --- Initialize local IPs ---
+read -ra LOCAL_IPS <<< "$(hostname -I)"
+
 trap 'cleanup; exit' EXIT INT TERM QUIT
 
 cleanup() {
@@ -246,17 +249,25 @@ fi
         pidinfo=$(echo "$line" | awk '{print $6}')
         ip="${remote%:*}"
 
-        # Normalize IPv6-mapped IPv4 (strip ::ffff:)
-        ip="${ip/#::ffff:/}"
-        
-        # Now check if it's private
-        if [[ "$ip" == "::1" ]]; then
-            continue
-        fi
+# Normalize IPv6-mapped IPv4
+ip="${ip/#::ffff:/}"
 
-        if [[ "$ip" =~ ^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
-            continue
-        fi
+# Skip localhost
+if [[ "$ip" == "::1" || "$ip" == "127.0.0.1" ]]; then
+    continue
+fi
+
+# Skip if IP matches any of the server's local IPs
+for localip in "${LOCAL_IPS[@]}"; do
+    if [[ "$ip" == "$localip" ]]; then
+        continue 2
+    fi
+done
+
+# Skip private IP ranges
+if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+    continue
+fi
 
         if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
             pid="${BASH_REMATCH[1]}"
