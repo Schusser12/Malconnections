@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # --- Setup ---
-timestamp() { date '+[%F %T]'; }  # Uniform timestamp function
+timestamp() { date '+[%F %T]'; }
 
 TMPDIR=$(mktemp -d)
 SEEN="$TMPDIR/seen"
 LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 ALERTS_FILE="$TMPDIR/alerts-summary.log"
+SUMMARY_FILE="$TMPDIR/scan-summary.log"
 START_TIME=$(date +%s)
 
 SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
@@ -15,14 +16,21 @@ mkdir -p "$SNAPSHOT_DIR"
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 trap cleanup EXIT
 
-# --- List of suspicious binaries and HTTP clients ---
+# --- Alert counters ---
+TOTAL_ALERTS=0
+STEALTH_ALERTS=0
+PHP_SUSPICIOUS=0
+DIRECT_IP_ALERTS=0
+STANDALONE_PHP_FILES=0
+
+# --- Suspicious tools ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 
-# --- Safe processes for direct IP ---
+# --- Safe processes ---
 SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
 
 cleanup() {
@@ -35,17 +43,29 @@ cleanup() {
     MINUTES=$(( (DURATION % 3600) / 60 ))
     SECONDS=$((DURATION % 60))
 
-    echo -e "${YELLOW}$(timestamp) Session duration: ${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
+    echo -e "\n${YELLOW}================ Session Summary ================${NC}"
+    echo -e "${YELLOW}Session Duration:   ${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
+    echo -e "${YELLOW}Total Alerts:       ${TOTAL_ALERTS}${NC}"
+    echo -e "${YELLOW}Stealth Detections: ${STEALTH_ALERTS}${NC}"
+    echo -e "${YELLOW}PHP Suspicious:     ${PHP_SUSPICIOUS}${NC}"
+    echo -e "${YELLOW}Direct IP Hits:     ${DIRECT_IP_ALERTS}${NC}"
+    echo -e "${YELLOW}Standalone PHP Files: ${STANDALONE_PHP_FILES}${NC}"
+    echo -e "${YELLOW}===============================================${NC}"
 
-    if [[ -s "$ALERTS_FILE" ]]; then
-        echo -e "\n${RED}$(timestamp) --- Potential Threats Found ---${NC}"
-        cat "$ALERTS_FILE"
-        echo -e "${RED}$(timestamp) --- End of Alert Summary ---${NC}\n"
-    else
-        echo -e "\n${GREEN}$(timestamp) No alerts recorded during this session.${NC}\n"
-    fi
+    {
+        echo "================ Session Summary ================"
+        echo "Session Date:       $(date '+%F %T')"
+        echo "Session Duration:   ${HOURS}h ${MINUTES}m ${SECONDS}s"
+        echo "Total Alerts:       ${TOTAL_ALERTS}"
+        echo "Stealth Detections: ${STEALTH_ALERTS}"
+        echo "PHP Suspicious:     ${PHP_SUSPICIOUS}"
+        echo "Direct IP Hits:     ${DIRECT_IP_ALERTS}"
+        echo "Standalone PHP Files: ${STANDALONE_PHP_FILES}"
+        echo "Temporary Files:    $TMPDIR"
+        echo "=================================================="
+    } >> "$SUMMARY_FILE"
 
-    echo -e "${GREEN}$(timestamp) Temporary files saved in: $TMPDIR${NC}"
+    echo -e "\n${GREEN}$(timestamp) Temporary files saved in: $TMPDIR${NC}"
 }
 
 # --- Manual report mode ---
@@ -84,6 +104,8 @@ while true; do
         echo "$stealth" >> "$LOGFILE"
         echo -e "${RED}$(timestamp) [ALERT] Stealth connection detected!${NC}"
         echo "$(timestamp) [ALERT] Stealth connection detected!" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
+        ((STEALTH_ALERTS++))
     else
         echo "$(timestamp) [INFO] No stealth connections detected." >> "$LOGFILE"
     fi
@@ -98,6 +120,8 @@ while true; do
         echo "$suspicious" >> "$LOGFILE"
         echo -e "${YELLOW}$(timestamp) [WARN] Suspicious PHP socket activity detected!${NC}"
         echo "$(timestamp) [WARN] Suspicious PHP socket activity detected!" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
+        ((PHP_SUSPICIOUS++))
     else
         echo "$(timestamp) [INFO] No suspicious PHP socket activity detected." >> "$LOGFILE"
     fi
@@ -117,6 +141,7 @@ while true; do
     if [[ $close_wait_count -gt 100 ]]; then
         echo -e "${RED}$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
         echo "$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
     fi
 
     # --- PHP Outbound DNS Query Check ---
@@ -125,6 +150,8 @@ while true; do
         echo "$php_dns" >> "$LOGFILE"
         echo -e "${RED}$(timestamp) [ALERT] PHP process making outbound DNS queries detected!${NC}"
         echo "$(timestamp) [ALERT] PHP outbound DNS query detected!" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
+        ((PHP_SUSPICIOUS++))
     else
         echo "$(timestamp) [INFO] No PHP DNS queries detected." >> "$LOGFILE"
     fi
@@ -134,22 +161,28 @@ while true; do
         children=$(pgrep -P "$pid")
         for child in $children; do
             [[ ! -f "/proc/$child/cmdline" ]] && continue
-            cmd=$(tr '\0' ' ' < /proc/$child/cmdline)
+            cmd=$(tr '\0' ' ' < "/proc/$child/cmdline")
 
             if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
-                echo "$timestamp [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
                 echo -e "${RED}$(timestamp) [ALERT] PHP suspicious function call: $cmd${NC}"
+                echo "$(timestamp) [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
+                ((TOTAL_ALERTS++))
+                ((PHP_SUSPICIOUS++))
             fi
 
             if [[ "$cmd" =~ $SUSPICIOUS_TOOLS && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
-                echo "$timestamp [ALERT] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
                 echo -e "${YELLOW}$(timestamp) [WARN] Suspicious PHP child process: $cmd${NC}"
+                echo "$(timestamp) [WARN] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
+                ((TOTAL_ALERTS++))
+                ((PHP_SUSPICIOUS++))
             fi
 
             php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
             if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
-                echo "$timestamp [ALERT] PHP running from temp directory: $php_files" >> "$ALERTS_FILE"
                 echo -e "${RED}$(timestamp) [ALERT] PHP running from temp directory!${NC}"
+                echo "$(timestamp) [ALERT] PHP script running from temp folder: $php_files" >> "$ALERTS_FILE"
+                ((TOTAL_ALERTS++))
+                ((PHP_SUSPICIOUS++))
             fi
         done
     done
@@ -157,28 +190,27 @@ while true; do
     # --- Check for orphan PHP files ---
     orphan_php_files=$(find /tmp /dev/shm -type f -name "*.php" 2>/dev/null)
     if [[ -n "$orphan_php_files" ]]; then
-        echo "$timestamp [ALERT] Standalone PHP files detected in temp folders:" >> "$ALERTS_FILE"
-        echo "$orphan_php_files" >> "$ALERTS_FILE"
+        echo "$orphan_php_files" >> "$LOGFILE"
         echo -e "${RED}$(timestamp) [ALERT] Standalone PHP files found!${NC}"
+        echo "$(timestamp) [ALERT] Standalone PHP files detected:" >> "$ALERTS_FILE"
+        echo "$orphan_php_files" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
+        ((STANDALONE_PHP_FILES++))
     fi
 
-    # --- Outbound PID monitoring ---
+    # --- Outbound PID Monitoring ---
     while read -r pid; do
         [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
         grep -qx "$pid" "$SEEN" && continue
         echo "$pid" >> "$SEEN"
 
-        echo "$timestamp Outbound PID detected: $pid" >> "$LOGFILE"
-        php_files=$(sudo lsof -p "$pid" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
-        if [[ -n "$php_files" ]]; then
-            echo "$timestamp [INFO] Open PHP files: $php_files" >> "$LOGFILE"
-        fi
+        echo "$(timestamp) Outbound PID detected: $pid" >> "$LOGFILE"
     done < <(
         sudo ss -ntp 2>/dev/null |
         awk '$1 == "ESTAB" && $5 ~ /:80$|:443$/ && $6 ~ /pid=/ {match($6, /pid=([0-9]+)/, a); if (a[1]) print a[1]}' | sort -u
     )
 
-    # --- Direct IP detection ---
+    # --- Direct IP Connection Detection ---
     while read -r line; do
         remote=$(echo "$line" | awk '{print $5}')
         pidinfo=$(echo "$line" | awk '{print $6}')
@@ -204,7 +236,9 @@ while true; do
             } >> "$snapshot_file"
 
             echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip Process: $pname${NC}"
-            echo "$timestamp [ALERT] Direct IP connection: $ip by $pname PID $pid" >> "$ALERTS_FILE"
+            echo "$(timestamp) [ALERT] Direct IP connection: $ip by $pname PID $pid" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((DIRECT_IP_ALERTS++))
         fi
     done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
 
