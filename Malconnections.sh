@@ -9,6 +9,7 @@ LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 ALERTS_FILE="$TMPDIR/alerts-summary.log"
 SUMMARY_FILE="$TMPDIR/scan-summary.log"
 START_TIME=$(date +%s)
+SCAN_INTERVAL=2
 
 SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
 mkdir -p "$SNAPSHOT_DIR"
@@ -113,11 +114,10 @@ while true; do
 
     # Cache all necessary sudo outputs once
     NETSTAT_OUTPUT=$(sudo netstat -npt 2>/dev/null)
-    SS_OUTPUT=$(sudo ss -ntp 2>/dev/null)
-    SS_UDP_OUTPUT=$(sudo ss -uap 2>/dev/null)
-    PHP_PROCESSES=$(ps -eo pid,comm | grep '[p]hp')
     PHP_PIDS=$(ps faux | grep -E '[p]hp' | awk '{print $2}')
-
+    SS_OUTPUT=$(sudo ss -pnto 2>/dev/null)
+    SS_UDP_OUTPUT=$(sudo ss -uap 2>/dev/null)
+    
     # --- Stealth connection check ----
 stealth=$(grep -i stealth <<< "$NETSTAT_OUTPUT")
 if [[ -n "$stealth" ]]; then
@@ -147,37 +147,47 @@ fi
     fi
 
     # --- Outbound TCP Connection States ---
-    close_wait_count=$(sudo ss -pnto | awk '($1=="CLOSE-WAIT"){for(i=1;i<=NF;i++){if($i~/:80$|:443$/){print}}}' | wc -l)
-    sudo ss -pnto | awk '
-        ($1 == "ESTAB" || $1 == "CLOSE-WAIT" || $1 == "LAST-ACK") {
-            for (i=1; i<=NF; i++) {
-                if ($i ~ /:80$|:443$/) {
-                    print $1
-                    break
-                }
-            }
-    }' | sort | uniq -c | sort -rnk1,1 >> "$LOGFILE"
+    close_wait_count=$(awk '($1=="CLOSE-WAIT" && $5 ~ /:80$|:443$/){count++} END{print count+0}' <<< "$SS_OUTPUT")
 
-    if [[ $close_wait_count -gt 100 ]]; then
-        echo -e "${RED}$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
-        echo "$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)" >> "$ALERTS_FILE"
-        ((TOTAL_ALERTS++))
-    fi
+# Save TCP connection states grouped by type (ESTAB, CLOSE-WAIT, LAST-ACK)
+tcp_connection_summary=$(awk '
+    ($1 == "ESTAB" || $1 == "CLOSE-WAIT" || $1 == "LAST-ACK") {
+        for (i=1; i<=NF; i++) {
+            if ($i ~ /:80$|:443$/) {
+                print $1
+                break
+            }
+        }
+}' <<< "$SS_OUTPUT" | sort | uniq -c | sort -rnk1,1)
+
+# Always log the summary
+{
+    echo ""
+    echo "$(timestamp) TCP Connection Summary:"
+    echo "$tcp_connection_summary"
+} >> "$LOGFILE"
+
+# Alert if too many CLOSE-WAIT
+if (( close_wait_count > 100 )); then
+    echo -e "${RED}$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
+    echo "$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+fi
 
     # --- PHP Outbound DNS Query Check ---
-    php_dns=$(sudo ss -uap | grep '[p]hp' | grep ':53')
-    if [[ -n "$php_dns" ]]; then
-        echo "$php_dns" >> "$LOGFILE"
-        echo -e "${RED}$(timestamp) [ALERT] PHP process making outbound DNS queries detected!${NC}"
-        echo "$(timestamp) [ALERT] PHP outbound DNS query detected!" >> "$ALERTS_FILE"
-        ((TOTAL_ALERTS++))
-        ((PHP_SUSPICIOUS++))
-    else
-        echo "$(timestamp) [INFO] No PHP DNS queries detected." >> "$LOGFILE"
-    fi
+php_dns=$(grep '[p]hp' <<< "$SS_UDP_OUTPUT" | grep ':53')
+if [[ -n "$php_dns" ]]; then
+    echo "$php_dns" >> "$LOGFILE"
+    echo -e "${RED}$(timestamp) [ALERT] PHP process making outbound DNS queries detected!${NC}"
+    echo "$(timestamp) [ALERT] PHP outbound DNS query detected!" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+    ((PHP_SUSPICIOUS++))
+else
+    echo "$(timestamp) [INFO] No PHP DNS queries detected." >> "$LOGFILE"
+fi
 
     # --- Suspicious PHP Child Process Check ---
-    for pid in $(ps faux | grep -E '[p]hp' | awk '{print $2}'); do
+    for pid in $PHP_PIDS; do
         children=$(pgrep -P "$pid")
         for child in $children; do
             [[ ! -f "/proc/$child/cmdline" ]] && continue
@@ -262,5 +272,5 @@ fi
         fi
     done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
 
-    sleep 2
+    sleep $SCAN_INTERVAL
 done
