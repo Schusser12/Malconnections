@@ -3,22 +3,69 @@
 # --- Setup ---
 timestamp() { date '+[%F %T]'; }
 
+# ---Colors ---
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+show_help() {
+    echo "Usage: $0 [--help] [--report]"
+    echo "Options:"
+    echo "  --help       Show this help message"
+    echo "  --report     Show previous session's alerts and summary"
+}
+
+# --- Flags ---
+case "$1" in
+    --report)
+if [[ -f ~/.malconnections_lastdir ]]; then
+    LAST_TMPDIR=$(tail -n1 ~/.malconnections_lastdir)
+    ALERTS_FILE="$LAST_TMPDIR/alerts-summary.log"
+    SUMMARY_FILE="$LAST_TMPDIR/scan-summary.log"
+
+    if [[ -s "${ALERTS_FILE}" ]]; then
+        echo -e "\n${RED}$(timestamp) --- Potential Threats Found ---${NC}"
+        cat "${ALERTS_FILE}"
+        echo -e "${RED}$(timestamp) --- End of Alert Summary ---${NC}\n"
+    else
+        echo -e "\n${GREEN}$(timestamp) No alerts recorded during this session.${NC}\n"
+    fi
+
+    # Always print the session summary clearly:
+    if [[ -f "${SUMMARY_FILE}" ]]; then
+        echo -e "\n${YELLOW}Session Dashboard:${NC}"
+        cat "${SUMMARY_FILE}"
+    else
+        echo -e "\n${YELLOW}$(timestamp) No session summary file found.${NC}\n"
+    fi
+
+else
+    echo -e "\n${YELLOW}$(timestamp) No previous session found.${NC}\n"
+fi
+exit 0
+;;
+    --help)
+        show_help
+        exit 0
+        ;;
+esac
+
+# --- Initialize trap and session ---
+trap 'cleanup' EXIT
+trap 'exit 130' INT TERM QUIT
+
+# --- Setup session directories ---
 TMPDIR=$(mktemp -d)
+echo "$TMPDIR" > ~/.malconnections_lastdir
 SEEN="$TMPDIR/seen"
 LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 ALERTS_FILE="$TMPDIR/alerts-summary.log"
 SUMMARY_FILE="$TMPDIR/scan-summary.log"
 START_TIME=$(date +%s)
 SCAN_INTERVAL=2
-
 SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
 mkdir -p "$SNAPSHOT_DIR"
-
-# ---Colors ---
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-NC='\033[0m'
 
 # --- Alert counters ---
 TOTAL_ALERTS=0
@@ -33,8 +80,6 @@ SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd
 
 # --- Initialize local IPs ---
 read -ra LOCAL_IPS <<< "$(hostname -I)"
-
-trap 'cleanup; exit' EXIT INT TERM QUIT
 
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
@@ -70,33 +115,6 @@ cleanup() {
 
     echo -e "\n${GREEN}$(timestamp) Temporary files saved in: $TMPDIR${NC}"
 }
-
-show_help() {
-    echo "Usage: $0 [--help] [--report]"
-    echo "Options:"
-    echo "  --help       Show this help message"
-    echo "  --report     Show previous session's alerts and summary"
-}
-
-# --- Flags ---
-case "$1" in
-    --report)
-        if [[ -s "${ALERTS_FILE}" ]]; then
-            echo -e "\n${RED}$(timestamp) --- Potential Threats Found ---${NC}"
-            cat "${ALERTS_FILE}"
-            echo -e "${RED}$(timestamp) --- End of Alert Summary ---${NC}\n"
-            echo -e "\n${YELLOW}Session Dashboard:${NC}"
-            cat "${SUMMARY_FILE}"
-        else
-            echo -e "\n${GREEN}$(timestamp) No alerts recorded during this session.${NC}\n"
-        fi
-        exit 0
-        ;;
-    --help)
-        show_help
-        exit 0
-        ;;
-esac
 
 echo "Logging to: $LOGFILE"
 touch "${SEEN}" "${ALERTS_FILE}"
@@ -250,6 +268,10 @@ while read -r line; do
 
     ip="${remote%:*}"
 
+    # Remove brackets first
+    ip="${ip#[}"
+    ip="${ip%]}"
+
     # Normalize IPv6-mapped IPv4 to normal IPv4
     ip="${ip/#::ffff:/}"
     
@@ -279,6 +301,7 @@ if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
     continue
 fi
 
+    # Now process and alert if not skipped
         snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S_%N').log"
         {
             echo "--- Snapshot for PID $pid ---"
