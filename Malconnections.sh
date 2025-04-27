@@ -74,6 +74,9 @@ if [[ "$1" == "--report" ]]; then
         echo -e "\n${RED}$(timestamp) --- Potential Threats Found ---${NC}"
         cat "$ALERTS_FILE"
         echo -e "${RED}$(timestamp) --- End of Alert Summary ---${NC}\n"
+
+        echo -e "\n${YELLOW}Session Dashboard:${NC}"
+        cat "$SUMMARY_FILE"
     else
         echo -e "\n${GREEN}$(timestamp) No alerts recorded during this session.${NC}\n"
     fi
