@@ -103,10 +103,19 @@ while true; do
 
     # --- Outbound TCP Connection State Monitoring ---
     echo -e "\n$timestamp Outbound TCP connection states:" >> "$LOGFILE"
-    close_wait_count=$(sudo ss -pnto state close-wait 2>/dev/null | grep -c ':80$\|:443$')
-    sudo ss -pnto state established,close-wait,last-ack 2>/dev/null | awk '
-        $5 ~ /:80$|:443$/ {
-            print $1
+
+    # Count CLOSE-WAIT separately (carefully)
+    close_wait_count=$(sudo ss -pnto | awk '($1=="CLOSE-WAIT"){for(i=1;i<=NF;i++){if($i~/:80$|:443$/){print}}}' | wc -l)
+
+    # Now log the counts of ESTAB, CLOSE-WAIT, LAST-ACK
+    sudo ss -pnto | awk '
+        ($1 == "ESTAB" || $1 == "CLOSE-WAIT" || $1 == "LAST-ACK") {
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /:80$|:443$/) {
+                    print $1
+                    break
+                }
+            }
         }
     ' | sort | uniq -c | sort -rnk1,1 >> "$LOGFILE"
 
