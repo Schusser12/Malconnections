@@ -246,6 +246,10 @@ fi
         pidinfo=$(echo "$line" | awk '{print $6}')
         ip="${remote%:*}"
 
+        # Normalize IPv6-mapped IPv4 (strip ::ffff:)
+        ip="${ip/#::ffff:/}"
+        
+        # Now check if it's private
         if [[ "$ip" =~ ^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
             continue
         fi
