@@ -29,37 +29,48 @@ A lightweight Bash-based monitoring script that watches for suspicious outbound 
 
 All stored inside a temporary directory (`/tmp/...`):
 
-| File                    | Description                                      |
-|-------------------------|--------------------------------------------------|
-| `alerts-summary.log`    | All triggered alerts from this session           |
-| `outbound-YYYY-MM-DD.log` | Full log with timestamped activity & connections |
-| `seen`                  | Tracks which PIDs have already been analyzed     |
+| File                     | Description                                      |
+|---------------------------|--------------------------------------------------|
+| `alerts-summary.log`      | All triggered alerts from this session           |
+| `scan-summary.log`        | Full session summary (duration, stats, etc.)      |
+| `outbound-YYYY-MM-DD.log` | Timestamped connection and scan activity logs    |
+| `seen`                    | Tracks already analyzed PIDs to avoid duplicates |
+| `pid_snapshots/`          | Full snapshots of suspicious processes detected  |
 
 ---
 
 ## 🧪 Sample Log Snippet
 
 ```log
-[2025-04-11 20:22:15] Checking outbound connections...
+[2025-04-11 20:22:15] [INFO] Checking outbound connections...
 
-[2025-04-11 20:22:15] Stealth connection check:
-No stealth connections detected.
+[2025-04-11 20:22:15] [INFO] No stealth connections detected.
 
-[2025-04-11 20:22:15] Suspicious PHP socket activity check:
-No suspicious PHP socket activity detected.
+[2025-04-11 20:22:15] [INFO] No suspicious PHP socket activity detected.
 
-[2025-04-11 20:22:15] ----------------------------------------
+----------------------------------------
 PID: 9412
 User: testme
 Cmdline: /usr/bin/php -f /var/www/html/index.php
 CWD: /var/www/html
 Open .php files:
-/var/www/html/index.php
+- /var/www/html/index.php
 ```
 
+---
+
 ## 🚀 Usage
-
-Start the script:
-
+Clone the repository and start the monitor:
 ```bash
 bash Malconnections.sh
+```
+---
+
+### Optional Flags
+
+| Flag        | Description                                       |
+|-------------|---------------------------------------------------|
+| `--help`    | Show usage instructions                           |
+| `--report`  | Display the previous session’s alerts and summary |
+
+---
