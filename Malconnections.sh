@@ -74,9 +74,10 @@ PHP_SUSPICIOUS=0
 DIRECT_IP_ALERTS=0
 STANDALONE_PHP_FILES=0
 
-# --- Suspicious tools | Safe processes ---
+# --- Suspicious tools | Safe processes | Safe users ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
+SAFE_USERS="root|aakore
 
 # --- Initialize local IPs ---
 read -ra LOCAL_IPS <<< "$(hostname -I)"
@@ -252,6 +253,11 @@ fi
     # --- Outbound PID Monitoring ---
     while read -r pid; do
         [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
+
+    user=$(ps -o user= -p "$pid" 2>/dev/null)
+    if [[ "$user" =~ $SAFE_USERS ]]; then
+        continue
+    fi
         grep -qx "$pid" "$SEEN" && continue
         echo "$pid" >> "$SEEN"
 
@@ -296,10 +302,11 @@ done
     if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
         pid="${BASH_REMATCH[1]}"
         pname=$(ps -p "$pid" -o comm= 2>/dev/null)
-
-if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
-    continue
-fi
+        user=$(ps -o user= -p "$pid" 2>/dev/null)
+        
+    if [[ "$user" =~ $SAFE_USERS || "$pname" =~ $SAFE_PROCESSES ]]; then
+        continue
+    fi
         snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S_%N').log"
         {
             echo "--- Snapshot for PID $pid ---"
