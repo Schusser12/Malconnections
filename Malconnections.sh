@@ -243,53 +243,58 @@ fi
         awk '$1 == "ESTAB" && $5 ~ /:80$|:443$/ && $6 ~ /pid=/ {match($6, /pid=([0-9]+)/, a); if (a[1]) print a[1]}' | sort -u
     )
 
-    # --- Direct IP Connection Detection ---
-    while read -r line; do
-        remote=$(echo "$line" | awk '{print $5}')
-        pidinfo=$(echo "$line" | awk '{print $6}')
-        ip="${remote%:*}"
+# --- Direct IP Connection Detection ---
+while read -r line; do
+    remote=$(echo "$line" | awk '{print $5}')
+    pidinfo=$(echo "$line" | awk '{print $6}')
 
-# Normalize IPv6-mapped IPv4
-ip="${ip/#::ffff:/}"
+    ip="${remote%:*}"
 
-# Skip localhost
-if [[ "$ip" == "::1" || "$ip" == "127.0.0.1" ]]; then
-    continue
-fi
-
-# Skip if IP matches any of the server's local IPs
-for localip in "${LOCAL_IPS[@]}"; do
-    if [[ "$ip" == "$localip" ]]; then
-        continue 2
+    # Normalize IPv6-mapped IPv4 to normal IPv4
+    ip="${ip/#::ffff:/}"
+    
+    # Skip localhost connections
+    if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then
+        continue
     fi
-done
 
-# Skip private IP ranges
-if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
-    continue
-fi
-
-        if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
-            pid="${BASH_REMATCH[1]}"
-            pname=$(ps -p "$pid" -o comm= 2>/dev/null)
-            [[ "$pname" =~ $SAFE_PROCESSES ]] && continue
-
-            snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S_%N').log"
-            {
-                echo "--- Snapshot for PID $pid ---"
-                tr '\0' ' ' < "/proc/$pid/cmdline"
-                readlink "/proc/$pid/cwd"
-                readlink "/proc/$pid/exe"
-                sudo lsof -p "$pid" 2>/dev/null
-                echo "--- End Snapshot ---"
-            } >> "$snapshot_file"
-
-            echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip Process: $pname${NC}"
-            echo "$(timestamp) [ALERT] Direct IP connection: $ip by $pname PID $pid" >> "$ALERTS_FILE"
-            ((TOTAL_ALERTS++))
-            ((DIRECT_IP_ALERTS++))
+    # Skip if IP matches any local IP
+    for localip in "${LOCAL_IPS[@]}"; do
+        if [[ "$ip" == "$localip" ]]; then
+            continue 2
         fi
-    done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
+    done
+
+    # Skip general private network ranges
+    if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+        continue
+    fi
+
+    # --- End Skip Checks ---
+
+    # Now process and alert if not skipped
+    if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
+        pid="${BASH_REMATCH[1]}"
+        pname=$(ps -p "$pid" -o comm= 2>/dev/null)
+
+        # (optional: filter safe processes, if you have a SAFE_PROCESSES list)
+
+        snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S_%N').log"
+        {
+            echo "--- Snapshot for PID $pid ---"
+            tr '\0' ' ' < "/proc/$pid/cmdline"
+            readlink "/proc/$pid/cwd"
+            readlink "/proc/$pid/exe"
+            sudo lsof -p "$pid" 2>/dev/null
+            echo "--- End Snapshot ---"
+        } >> "$snapshot_file"
+
+        echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip Process: $pname${NC}"
+        echo "$(timestamp) [ALERT] Direct IP connection: $ip by $pname PID $pid" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
+        ((DIRECT_IP_ALERTS++))
+    fi
+done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
 
     sleep $SCAN_INTERVAL
 done
