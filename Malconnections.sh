@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 
 # --- List of known safe processes to ignore for direct IP detection ---
-SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore"
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon"
 
 # --- Manual report mode ---
 if [[ "$1" == "--report" ]]; then
