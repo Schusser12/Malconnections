@@ -7,6 +7,10 @@ LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
 ALERTS_FILE="$TMPDIR/alerts-summary.log"
 START_TIME=$(date +%s)
 
+# --- Snapshot Directory ---
+SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
+mkdir -p "$SNAPSHOT_DIR"
+
 # --- Terminal Colors ---
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -139,6 +143,8 @@ while true; do
 
     # --- Suspicious PHP Child Process Check ---
     echo -e "\n$timestamp Suspicious PHP child process check:" >> "$LOGFILE"
+    php_suspicious_found=0
+
     for pid in $(ps faux | egrep '[p]hp' | awk '{print $2}'); do
         children=$(pgrep -P "$pid")
         for child in $children; do
@@ -150,6 +156,7 @@ while true; do
                 echo "$timestamp [WARNING] PHP child process using suspicious function: $cmd" >> "$LOGFILE"
                 echo -e "${RED}[ALERT] PHP suspicious function call: ${cmd}${NC}"
                 echo "$timestamp [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
+                php_suspicious_found=1
             fi
 
             # --- Detect use of suspicious binaries ---
@@ -157,6 +164,7 @@ while true; do
                 echo "$timestamp Suspicious child process spawned by PHP PID $pid: $cmd" >> "$LOGFILE"
                 echo -e "${YELLOW}[Warning] Suspicious PHP child process: ${cmd}${NC}"
                 echo "$timestamp [ALERT] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
+                php_suspicious_found=1
             fi
 
             # --- Detect PHP scripts running from /tmp or /dev/shm ---
@@ -165,12 +173,33 @@ while true; do
                 echo "$timestamp [ALERT] PHP script running from temp folder: $php_files" >> "$LOGFILE"
                 echo -e "${RED}[ALERT] PHP running from temp directory!${NC}"
                 echo "$timestamp [ALERT] PHP running from temp directory: $php_files" >> "$ALERTS_FILE"
+                php_suspicious_found=1
             fi
         done
     done
 
+        if [[ $php_suspicious_found -eq 0 ]]; then
+        echo "No suspicious PHP child processes found." >> "$LOGFILE"
+        fi
+
+    # --- Check for standalone PHP files in /tmp or /dev/shm ---
+    echo -e "\n$timestamp Checking for standalone PHP files in /tmp or /dev/shm:" >> "$LOGFILE"
+
+    orphan_php_files=$(find /tmp /dev/shm -type f -name "*.php" 2>/dev/null)
+
+    if [[ -n "$orphan_php_files" ]]; then
+        echo "$orphan_php_files" >> "$LOGFILE"
+        echo -e "${RED}[ALERT] Standalone PHP files found in temp directories!${NC}"
+        echo "$timestamp [ALERT] Standalone PHP files detected in temp folders:" >> "$ALERTS_FILE"
+        echo "$orphan_php_files" >> "$ALERTS_FILE"
+    else
+        echo "No standalone PHP files found in /tmp or /dev/shm." >> "$LOGFILE"
+    fi
+
     # --- Outbound Connection Scanning for New PIDs ---
     echo -e "\n$timestamp Outbound connection scanning for new PIDs:" >> "$LOGFILE"
+    new_pid_found=0
+
     while read -r pid; do
         [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
         user=$(ps -o user= -p "$pid" 2>/dev/null)
@@ -192,6 +221,8 @@ while true; do
             echo "$php_files" >> "$LOGFILE"
         fi
         echo >> "$LOGFILE"
+        
+        new_pid_found=1
     done < <(
         sudo ss -ntp 2>/dev/null |
         awk '$1 == "ESTAB" && $5 ~ /:80$|:443$/ && $6 ~ /pid=/ {
@@ -200,8 +231,13 @@ while true; do
         }' | sort -u
     )
 
+    if [[ $new_pid_found -eq 0 ]]; then
+    echo "No new outbound PIDs found." >> "$LOGFILE"
+    fi
+
 # --- Direct IP Connection Detection ---
 echo -e "\n$timestamp Direct IP connection detection:" >> "$LOGFILE"
+
 while read -r line; do
     remote=$(echo "$line" | awk '{print $5}')
     pidinfo=$(echo "$line" | awk '{print $6}')
@@ -216,20 +252,16 @@ while read -r line; do
 
     # Only alert if remote is a raw IP
     if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        # Extract PID cleanly
         if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
             pid="${BASH_REMATCH[1]}"
 
-            # Find process name
             pname=$(ps -p "$pid" -o comm= 2>/dev/null)
             pname=${pname:-unknown}
 
-            # Skip if it's a known safe process
             if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
                 continue
             fi
 
-            # Look for open PHP files for that PID
             php_files=$(sudo lsof -p "$pid" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
 
             if [[ -n "$php_files" ]]; then
@@ -239,6 +271,26 @@ while read -r line; do
                 echo "[ALERT] Direct IP connection detected: $ip (Process: $pname PID $pid)" | tee -a "$LOGFILE"
                 echo "$timestamp [ALERT] Direct IP connection detected: $ip (Process: $pname PID $pid)" >> "$ALERTS_FILE"
             fi
+
+            # --- 📸 Immediate snapshot into separate file ---
+            if [[ -d "/proc/$pid" ]]; then
+                snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S').log"
+                {
+                    echo "--- Process Snapshot for PID $pid ---"
+                    echo "Timestamp: $(date '+%F %T')"
+                    echo "Cmdline:"
+                    tr '\0' ' ' < /proc/$pid/cmdline
+                    echo "CWD: $(readlink /proc/$pid/cwd 2>/dev/null)"
+                    echo "EXE: $(readlink /proc/$pid/exe 2>/dev/null)"
+                    echo "Open Files:"
+                    sudo lsof -p "$pid" 2>/dev/null
+                    echo "--- End of Snapshot for PID $pid ---"
+                } >> "$snapshot_file"
+            else
+                echo "[!] PID $pid disappeared before snapshot." >> "$LOGFILE"
+            fi
+            # --- end snapshot ---
+
         else
             echo "[ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" | tee -a "$LOGFILE"
             echo "$timestamp [ALERT] Direct IP connection detected: $ip (Info: $pidinfo)" >> "$ALERTS_FILE"
@@ -247,6 +299,7 @@ while read -r line; do
 done < <(
     sudo ss -ntp 2>/dev/null | grep ESTAB
 )
+
 
     # --- Pause before next check ---
     sleep 2
