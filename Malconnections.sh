@@ -13,12 +13,11 @@ START_TIME=$(date +%s)
 SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
 mkdir -p "$SNAPSHOT_DIR"
 
+# ---Colors ---
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 NC='\033[0m'
-
-trap cleanup EXIT
 
 # --- Alert counters ---
 TOTAL_ALERTS=0
@@ -27,11 +26,11 @@ PHP_SUSPICIOUS=0
 DIRECT_IP_ALERTS=0
 STANDALONE_PHP_FILES=0
 
-# --- Suspicious tools ---
+# --- Suspicious tools | Safe processes ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
-
-# --- Safe processes ---
 SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
+
+trap cleanup EXIT INT TERM QUIT
 
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
@@ -68,24 +67,35 @@ cleanup() {
     echo -e "\n${GREEN}$(timestamp) Temporary files saved in: $TMPDIR${NC}"
 }
 
-# --- Manual report mode ---
-if [[ "$1" == "--report" ]]; then
-    if [[ -s "$ALERTS_FILE" ]]; then
-        echo -e "\n${RED}$(timestamp) --- Potential Threats Found ---${NC}"
-        cat "$ALERTS_FILE"
-        echo -e "${RED}$(timestamp) --- End of Alert Summary ---${NC}\n"
+show_help() {
+    echo "Usage: $0 [--help] [--report]"
+    echo "Options:"
+    echo "  --help       Show this help message"
+    echo "  --report     Show previous session's alerts and summary"
+}
 
-        echo -e "\n${YELLOW}Session Dashboard:${NC}"
-        cat "$SUMMARY_FILE"
-    else
-        echo -e "\n${GREEN}$(timestamp) No alerts recorded during this session.${NC}\n"
-    fi
-    exit 0
-fi
+# --- Flags ---
+case "$1" in
+    --report)
+        if [[ -s "${ALERTS_FILE}" ]]; then
+            echo -e "\n${RED}$(timestamp) --- Potential Threats Found ---${NC}"
+            cat "${ALERTS_FILE}"
+            echo -e "${RED}$(timestamp) --- End of Alert Summary ---${NC}\n"
+            echo -e "\n${YELLOW}Session Dashboard:${NC}"
+            cat "${SUMMARY_FILE}"
+        else
+            echo -e "\n${GREEN}$(timestamp) No alerts recorded during this session.${NC}\n"
+        fi
+        exit 0
+        ;;
+    --help)
+        show_help
+        exit 0
+        ;;
+esac
 
 echo "Logging to: $LOGFILE"
-touch "$SEEN"
-touch "$ALERTS_FILE"
+touch "${SEEN}" "${ALERTS_FILE}"
 
 # --- Initial Maldet Report ---
 echo -e "\n$(timestamp) Recent Maldet scan results:" >> "$LOGFILE"
@@ -101,21 +111,28 @@ while true; do
     echo -e "${GREEN}$(timestamp) [INFO] Checking outbound connections...${NC}"
     echo "$(timestamp) [INFO] Checking outbound connections..." >> "$LOGFILE"
 
-    # --- Stealth connection check ---
-    stealth=$(sudo netstat -npt 2>/dev/null | grep -i stealth)
-    if [[ -n "$stealth" ]]; then
-        echo "$stealth" >> "$LOGFILE"
-        echo -e "${RED}$(timestamp) [ALERT] Stealth connection detected!${NC}"
-        echo "$(timestamp) [ALERT] Stealth connection detected!" >> "$ALERTS_FILE"
-        ((TOTAL_ALERTS++))
-        ((STEALTH_ALERTS++))
-    else
-        echo "$(timestamp) [INFO] No stealth connections detected." >> "$LOGFILE"
-    fi
+    # Cache all necessary sudo outputs once
+    NETSTAT_OUTPUT=$(sudo netstat -npt 2>/dev/null)
+    SS_OUTPUT=$(sudo ss -ntp 2>/dev/null)
+    SS_UDP_OUTPUT=$(sudo ss -uap 2>/dev/null)
+    PHP_PROCESSES=$(ps -eo pid,comm | grep '[p]hp')
+    PHP_PIDS=$(ps faux | grep -E '[p]hp' | awk '{print $2}')
+
+    # --- Stealth connection check ----
+stealth=$(grep -i stealth <<< "$NETSTAT_OUTPUT")
+if [[ -n "$stealth" ]]; then
+    echo "$stealth" >> "$LOGFILE"
+    echo -e "${RED}$(timestamp) [ALERT] Stealth connection detected!${NC}"
+    echo "$(timestamp) [ALERT] Stealth connection detected!" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+    ((STEALTH_ALERTS++))
+else
+    echo "$(timestamp) [INFO] No stealth connections detected." >> "$LOGFILE"
+fi
 
     # --- Suspicious PHP Socket Activity ---
     suspicious=""
-    for ps in $(ps faux | grep -E '[p]hp' | awk '{print $2}'); do
+    for ps in $PHP_PIDS; do
         output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "$(hostname)\.[0-9]")
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
