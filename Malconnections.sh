@@ -107,7 +107,7 @@ STANDALONE_PHP_FILES=0
 
 # --- Suspicious tools | Safe processes | Safe users ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
-SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd"
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd|qmail-smtpd"
 SAFE_USERS="root|aakore"
 
 # --- Initialize local IPs ---
