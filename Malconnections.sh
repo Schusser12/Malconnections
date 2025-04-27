@@ -31,7 +31,7 @@ STANDALONE_PHP_FILES=0
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
 
-trap cleanup EXIT INT TERM QUIT
+trap 'cleanup; exit' EXIT INT TERM QUIT
 
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
