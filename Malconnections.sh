@@ -333,6 +333,10 @@ done
     if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
         pid="${BASH_REMATCH[1]}"
 
+    # Lookup country (GeoIP tagging)
+    country=$(curl -s --max-time 3 "https://ipwho.is/$ip" | grep -oP '"country_code":"\K[A-Z]+' || echo "UNK")
+    country=$(echo "$country" | tr -d '\n')
+    
     if [[ ! -d "/proc/$pid" ]]; then
         # PID is already gone
         pname="[unknown]"
@@ -360,8 +364,8 @@ done
         } >> "$snapshot_file"
     fi
 
-    echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip Process: $pname${NC}"
-    echo "$(timestamp) [ALERT] Direct IP connection: $ip by $pname PID $pid" >> "$ALERTS_FILE"
+    echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip [$country] Process: $pname${NC}"
+    echo "$(timestamp) [ALERT] Direct IP connection: $ip [$country] by $pname PID $pid" >> "$ALERTS_FILE"
     ((TOTAL_ALERTS++))
     ((DIRECT_IP_ALERTS++))
 fi
