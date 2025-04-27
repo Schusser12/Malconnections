@@ -167,9 +167,9 @@ while true; do
 
     # Cache all necessary sudo outputs once
     NETSTAT_OUTPUT=$(sudo netstat -npt 2>/dev/null)
-    PHP_PIDS=$(ps faux | grep -E '[p]hp' | awk '{print $2}')
     SS_OUTPUT=$(sudo ss -pnto 2>/dev/null)
     SS_UDP_OUTPUT=$(sudo ss -uap 2>/dev/null)
+    PHP_PIDS=$(echo "$SS_OUTPUT" | grep -E '[p]hp' | awk -F 'pid=' '{print $2}' | awk -F',' '{print $1}' | sort -u)
 
     # --- Stealth connection check ----
 stealth=$(grep -i stealth <<< "$NETSTAT_OUTPUT")
@@ -240,35 +240,36 @@ else
 fi
 
     # --- Suspicious PHP Child Process Check ---
-    for pid in $PHP_PIDS; do
-        children=$(pgrep -P "$pid")
-        for child in $children; do
-            [[ ! -f "/proc/$child/cmdline" ]] && continue
-            cmd=$(tr '\0' ' ' < "/proc/$child/cmdline")
+if [[ -n "$PHP_PIDS" ]]; then
+    ALL_PHP_CHILDREN=$(pgrep -P $(echo $PHP_PIDS | tr '\n' ' ') 2>/dev/null)
 
-            if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
-                echo -e "${RED}$(timestamp) [ALERT] PHP suspicious function call: $cmd${NC}"
-                echo "$(timestamp) [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
-                ((TOTAL_ALERTS++))
-                ((PHP_SUSPICIOUS++))
-            fi
+    for child in $ALL_PHP_CHILDREN; do
+        [[ ! -f "/proc/$child/cmdline" ]] && continue
+        cmd=$(tr '\0' ' ' < "/proc/$child/cmdline")
 
-            if [[ "$cmd" =~ $SUSPICIOUS_TOOLS && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
-                echo -e "${YELLOW}$(timestamp) [WARN] Suspicious PHP child process: $cmd${NC}"
-                echo "$(timestamp) [WARN] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
-                ((TOTAL_ALERTS++))
-                ((PHP_SUSPICIOUS++))
-            fi
+        if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
+            echo -e "${RED}$(timestamp) [ALERT] PHP suspicious function call: $cmd${NC}"
+            echo "$(timestamp) [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((PHP_SUSPICIOUS++))
+        fi
 
-            php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
-            if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
-                echo -e "${RED}$(timestamp) [ALERT] PHP running from temp directory!${NC}"
-                echo "$(timestamp) [ALERT] PHP script running from temp folder: $php_files" >> "$ALERTS_FILE"
-                ((TOTAL_ALERTS++))
-                ((PHP_SUSPICIOUS++))
-            fi
-        done
+        if [[ "$cmd" =~ $SUSPICIOUS_TOOLS && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
+            echo -e "${YELLOW}$(timestamp) [WARN] Suspicious PHP child process: $cmd${NC}"
+            echo "$(timestamp) [WARN] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((PHP_SUSPICIOUS++))
+        fi
+
+        php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
+        if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
+            echo -e "${RED}$(timestamp) [ALERT] PHP running from temp directory!${NC}"
+            echo "$(timestamp) [ALERT] PHP script running from temp folder: $php_files" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((PHP_SUSPICIOUS++))
+        fi
     done
+fi
 
     # --- Check for orphan PHP files ---
     orphan_php_files=$(find /tmp /dev/shm -type f -name "*.php" 2>/dev/null)
