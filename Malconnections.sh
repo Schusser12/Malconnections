@@ -253,31 +253,31 @@ while read -r line; do
     # Normalize IPv6-mapped IPv4 to normal IPv4
     ip="${ip/#::ffff:/}"
     
-    # Skip localhost connections
-    if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then
-        continue
+# Skip localhost connections
+if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then
+    continue
+fi
+
+# Skip general private ranges
+if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+    continue
+fi
+
+# Skip if IP matches any local IP
+for localip in "${LOCAL_IPS[@]}"; do
+    if [[ "$ip" == "$localip" ]]; then
+        continue 2
     fi
-
-    # Skip if IP matches any local IP
-    for localip in "${LOCAL_IPS[@]}"; do
-        if [[ "$ip" == "$localip" ]]; then
-            continue 2
-        fi
-    done
-
-    # Skip general private network ranges
-    if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
-        continue
-    fi
-
-    # --- End Skip Checks ---
+done
 
     # Now process and alert if not skipped
     if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
         pid="${BASH_REMATCH[1]}"
         pname=$(ps -p "$pid" -o comm= 2>/dev/null)
 
-        # (optional: filter safe processes, if you have a SAFE_PROCESSES list)
+if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
+    continue
+fi
 
         snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S_%N').log"
         {
