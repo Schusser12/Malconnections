@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
 
 # --- List of known safe processes to ignore for direct IP detection ---
-SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon"
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
 
 # --- Manual report mode ---
 if [[ "$1" == "--report" ]]; then
@@ -263,6 +263,11 @@ while read -r line; do
             fi
 
             php_files=$(sudo lsof -p "$pid" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
+
+            # --- Skip whitelist safe PHP files ---
+            if [[ "$php_files" =~ wp-cron.php$ ]] || [[ "$php_files" =~ bin/magento$ ]]; then
+                continue
+            fi
 
             if [[ -n "$php_files" ]]; then
                 echo "[ALERT] Direct IP connection detected: $ip by PID $pid (PHP files: $php_files)" | tee -a "$LOGFILE"
