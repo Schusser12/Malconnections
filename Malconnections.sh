@@ -45,8 +45,8 @@ exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compres
 trap 'ec=$?; echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $ec)${NC}" >&2' ERR
 
 # --- Initialize trap and session ---
-trap 'cleanup' EXIT
-trap 'exit 130' INT TERM QUIT
+trap 'cleanup; kill 0' EXIT
+trap 'kill 0; exit 130' INT TERM QUIT
 
 show_help() {
     echo -e ""
