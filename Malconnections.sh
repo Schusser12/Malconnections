@@ -10,6 +10,44 @@ GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# --- Setup session directories ---
+TMPDIR=$(mktemp -d)
+echo "$TMPDIR" > ~/.malconnections_lastdir
+SEEN="$TMPDIR/seen"
+LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
+ALERTS_FILE="$TMPDIR/alerts-summary.log"
+SUMMARY_FILE="$TMPDIR/scan-summary.log"
+START_TIME=$(date +%s)
+SCAN_INTERVAL=2
+SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
+mkdir -p "$SNAPSHOT_DIR"
+
+# --- Alert counters ---
+TOTAL_ALERTS=0
+STEALTH_ALERTS=0
+PHP_SUSPICIOUS=0
+DIRECT_IP_ALERTS=0
+STANDALONE_PHP_FILES=0
+
+# --- Suspicious tools | Safe processes | Safe users ---
+SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd|qmail-smtpd"
+SAFE_USERS="root|aakore"
+
+# --- Initialize local IPs ---
+read -ra LOCAL_IPS <<< "$(hostname -I)"
+
+# Setup compressed error logging
+compressed_logfile="$TMPDIR/live-session.log.gz"
+exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile")
+
+# Error trap for detailed crash info
+trap 'ec=$?; echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $ec)${NC}" >&2' ERR
+
+# --- Initialize trap and session ---
+trap 'cleanup' EXIT
+trap 'exit 130' INT TERM QUIT
+
 show_help() {
     echo -e ""
     echo -e "${CYAN}╭─────────────────────────────────────────────────────╮${NC}"
@@ -81,37 +119,6 @@ exit 0
         exit 0
         ;;
 esac
-
-# --- Initialize trap and session ---
-trap 'cleanup' EXIT
-trap 'exit 130' INT TERM QUIT
-
-# --- Setup session directories ---
-TMPDIR=$(mktemp -d)
-echo "$TMPDIR" > ~/.malconnections_lastdir
-SEEN="$TMPDIR/seen"
-LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
-ALERTS_FILE="$TMPDIR/alerts-summary.log"
-SUMMARY_FILE="$TMPDIR/scan-summary.log"
-START_TIME=$(date +%s)
-SCAN_INTERVAL=2
-SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
-mkdir -p "$SNAPSHOT_DIR"
-
-# --- Alert counters ---
-TOTAL_ALERTS=0
-STEALTH_ALERTS=0
-PHP_SUSPICIOUS=0
-DIRECT_IP_ALERTS=0
-STANDALONE_PHP_FILES=0
-
-# --- Suspicious tools | Safe processes | Safe users ---
-SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
-SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd|qmail-smtpd"
-SAFE_USERS="root|aakore"
-
-# --- Initialize local IPs ---
-read -ra LOCAL_IPS <<< "$(hostname -I)"
 
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
