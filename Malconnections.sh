@@ -7,13 +7,44 @@ timestamp() { date '+[%F %T]'; }
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 show_help() {
-    echo "Usage: $0 [--help] [--report]"
-    echo "Options:"
-    echo "  --help       Show this help message"
-    echo "  --report     Show previous session's alerts and summary"
+    echo -e ""
+    echo -e "${CYAN}╭─────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│        Malconnections.sh - Outbound Threat Scanner   │${NC}"
+    echo -e "${CYAN}╰─────────────────────────────────────────────────────╯${NC}"
+    echo -e ""
+    echo -e "${YELLOW}Usage:${NC}"
+    echo -e "  ${GREEN}$0${NC} [OPTIONS]"
+    echo -e ""
+    echo -e "${YELLOW}Options:${NC}"
+    echo -e "  ${GREEN}--help${NC}        Show this help message and exit."
+    echo -e "  ${GREEN}--report${NC}      Show alerts and session summary from the previous scan."
+    echo -e ""
+    echo -e "${YELLOW}Description:${NC}"
+    echo -e "  This script monitors outbound TCP and UDP connections for suspicious"
+    echo -e "  behavior, including stealth connections, PHP socket activity, direct"
+    echo -e "  IP communications, and unexpected processes initiating network activity."
+    echo -e ""
+    echo -e "${YELLOW}Features:${NC}"
+    echo -e "  - Detects stealthy outbound traffic"
+    echo -e "  - Flags suspicious PHP child processes"
+    echo -e "  - Captures direct IP connections bypassing DNS"
+    echo -e "  - Takes live process snapshots for forensics"
+    echo -e "  - Summarizes session statistics and alerts"
+    echo -e ""
+    echo -e "${YELLOW}Session Files:${NC}"
+    echo -e "  Temporary session files are saved under:"
+    echo -e "    ${GREEN}/tmp/tmp.<random>/*${NC}"
+    echo -e "  Last session path saved in:"
+    echo -e "    ${GREEN}~/.malconnections_lastdir${NC}"
+    echo -e ""
+    echo -e "${YELLOW}Examples:${NC}"
+    echo -e "  ${GREEN}$0${NC}                 Start live outbound monitoring"
+    echo -e "  ${GREEN}$0 --report${NC}         View the previous session's threat report"
+    echo -e ""
 }
 
 # --- Flags ---
@@ -74,9 +105,10 @@ PHP_SUSPICIOUS=0
 DIRECT_IP_ALERTS=0
 STANDALONE_PHP_FILES=0
 
-# --- Suspicious tools | Safe processes ---
+# --- Suspicious tools | Safe processes | Safe users ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
-SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process"
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd|qmail-smtpd"
+SAFE_USERS="root|aakore"
 
 # --- Initialize local IPs ---
 read -ra LOCAL_IPS <<< "$(hostname -I)"
@@ -134,11 +166,11 @@ while true; do
     echo "$(timestamp) [INFO] Checking outbound connections..." >> "$LOGFILE"
 
     # Cache all necessary sudo outputs once
-    NETSTAT_OUTPUT=$(sudo netstat -npt 2>/dev/null)
-    PHP_PIDS=$(ps faux | grep -E '[p]hp' | awk '{print $2}')
-    SS_OUTPUT=$(sudo ss -pnto 2>/dev/null)
-    SS_UDP_OUTPUT=$(sudo ss -uap 2>/dev/null)
-    
+    NETSTAT_OUTPUT=$(timeout 10 sudo netstat -npt 2>/dev/null)
+    SS_OUTPUT=$(timeout 10 sudo ss -pnto 2>/dev/null)
+    SS_UDP_OUTPUT=$(timeout 10 sudo ss -uap 2>/dev/null)
+    PHP_PIDS=$(echo "$SS_OUTPUT" | grep -E '[p]hp' | awk -F 'pid=' '{print $2}' | awk -F',' '{print $1}' | sort -u)
+
     # --- Stealth connection check ----
 stealth=$(grep -i stealth <<< "$NETSTAT_OUTPUT")
 if [[ -n "$stealth" ]]; then
@@ -208,35 +240,36 @@ else
 fi
 
     # --- Suspicious PHP Child Process Check ---
-    for pid in $PHP_PIDS; do
-        children=$(pgrep -P "$pid")
-        for child in $children; do
-            [[ ! -f "/proc/$child/cmdline" ]] && continue
-            cmd=$(tr '\0' ' ' < "/proc/$child/cmdline")
+if [[ -n "$PHP_PIDS" ]]; then
+    ALL_PHP_CHILDREN=$(pgrep -P $(echo $PHP_PIDS | tr '\n' ' ') 2>/dev/null)
 
-            if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
-                echo -e "${RED}$(timestamp) [ALERT] PHP suspicious function call: $cmd${NC}"
-                echo "$(timestamp) [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
-                ((TOTAL_ALERTS++))
-                ((PHP_SUSPICIOUS++))
-            fi
+    for child in $ALL_PHP_CHILDREN; do
+        [[ ! -f "/proc/$child/cmdline" ]] && continue
+        cmd=$(tr '\0' ' ' < "/proc/$child/cmdline")
 
-            if [[ "$cmd" =~ $SUSPICIOUS_TOOLS && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
-                echo -e "${YELLOW}$(timestamp) [WARN] Suspicious PHP child process: $cmd${NC}"
-                echo "$(timestamp) [WARN] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
-                ((TOTAL_ALERTS++))
-                ((PHP_SUSPICIOUS++))
-            fi
+        if [[ "$cmd" =~ (system|exec|shell_exec|popen) && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
+            echo -e "${RED}$(timestamp) [ALERT] PHP suspicious function call: $cmd${NC}"
+            echo "$(timestamp) [ALERT] PHP suspicious function call: $cmd" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((PHP_SUSPICIOUS++))
+        fi
 
-            php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
-            if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
-                echo -e "${RED}$(timestamp) [ALERT] PHP running from temp directory!${NC}"
-                echo "$(timestamp) [ALERT] PHP script running from temp folder: $php_files" >> "$ALERTS_FILE"
-                ((TOTAL_ALERTS++))
-                ((PHP_SUSPICIOUS++))
-            fi
-        done
+        if [[ "$cmd" =~ $SUSPICIOUS_TOOLS && ! "$cmd" =~ bin/magento && ! "$cmd" =~ wp-cron.php ]]; then
+            echo -e "${YELLOW}$(timestamp) [WARN] Suspicious PHP child process: $cmd${NC}"
+            echo "$(timestamp) [WARN] Suspicious PHP child process: $cmd" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((PHP_SUSPICIOUS++))
+        fi
+
+        php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
+        if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
+            echo -e "${RED}$(timestamp) [ALERT] PHP running from temp directory!${NC}"
+            echo "$(timestamp) [ALERT] PHP script running from temp folder: $php_files" >> "$ALERTS_FILE"
+            ((TOTAL_ALERTS++))
+            ((PHP_SUSPICIOUS++))
+        fi
     done
+fi
 
     # --- Check for orphan PHP files ---
     orphan_php_files=$(find /tmp /dev/shm -type f -name "*.php" 2>/dev/null)
@@ -252,6 +285,11 @@ fi
     # --- Outbound PID Monitoring ---
     while read -r pid; do
         [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
+
+    user=$(ps -o user= -p "$pid" 2>/dev/null)
+    if [[ "$user" =~ $SAFE_USERS ]]; then
+        continue
+    fi
         grep -qx "$pid" "$SEEN" && continue
         echo "$pid" >> "$SEEN"
 
@@ -262,62 +300,96 @@ fi
     )
 
 # --- Direct IP Connection Detection ---
+declare -a suspicious_ips=()
+
 while read -r line; do
     remote=$(echo "$line" | awk '{print $5}')
     pidinfo=$(echo "$line" | awk '{print $6}')
 
     ip="${remote%:*}"
-
-    # Remove brackets first
     ip="${ip#[}"
     ip="${ip%]}"
-
-    # Normalize IPv6-mapped IPv4 to normal IPv4
     ip="${ip/#::ffff:/}"
-    
-# Skip localhost connections
-if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then
-    continue
-fi
 
-# Skip general private ranges
-if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
-    continue
-fi
+# Skip localhost connections and private IPs
+    if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then continue; fi
+    if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then continue; fi
 
-# Skip if IP matches any local IP
 for localip in "${LOCAL_IPS[@]}"; do
-    if [[ "$ip" == "$localip" ]]; then
-        continue 2
+    if [[ "$ip" == "$localip" ]]; then continue 2; fi
+done
+
+    # Collect suspicious IPs
+    suspicious_ips+=("$ip:$pidinfo")
+
+done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
+
+# --- Parallel GeoIP Lookups ---
+MAX_PARALLEL=10
+count=0
+
+for item in "${suspicious_ips[@]}"; do
+    ip="${item%%:*}"
+
+    if [[ -f "$TMPDIR/geoip_lookup_${ip}.json" ]]; then
+        continue
+    fi
+
+    (
+      curl -s --max-time 3 "https://ipwho.is/$ip" > "$TMPDIR/geoip_lookup_$ip.json"
+    ) &
+    ((count++))
+    if (( count % MAX_PARALLEL == 0 )); then
+        wait
     fi
 done
 
-    # Now process and alert if not skipped
+wait
+
+# --- Process Suspicious Connections ---
+for item in "${suspicious_ips[@]}"; do
+    ip="${item%%:*}"
+    pidinfo="${item#*:}"
+
     if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
         pid="${BASH_REMATCH[1]}"
-        pname=$(ps -p "$pid" -o comm= 2>/dev/null)
 
-if [[ "$pname" =~ $SAFE_PROCESSES ]]; then
-    continue
-fi
+        # Read country from cached GeoIP file
+        country=$(grep -oP '"country_code":"\K[A-Z]+' "$TMPDIR/geoip_lookup_${ip}.json" 2>/dev/null || echo "UNK")
+        country=$(echo "$country" | tr -d '\n')
 
-    # Now process and alert if not skipped
-        snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_$(date '+%H%M%S_%N').log"
-        {
-            echo "--- Snapshot for PID $pid ---"
-            tr '\0' ' ' < "/proc/$pid/cmdline"
-            readlink "/proc/$pid/cwd"
-            readlink "/proc/$pid/exe"
-            sudo lsof -p "$pid" 2>/dev/null
-            echo "--- End Snapshot ---"
-        } >> "$snapshot_file"
+        if [[ ! -d "/proc/$pid" ]]; then
+            pname="[unknown]"
+            user="[unknown]"
+        else
+            pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "[unknown]")
+            user=$(ps -o user= -p "$pid" 2>/dev/null || echo "[unknown]")
+        fi
 
-        echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip Process: $pname${NC}"
-        echo "$(timestamp) [ALERT] Direct IP connection: $ip by $pname PID $pid" >> "$ALERTS_FILE"
+        if [[ "$user" =~ $SAFE_USERS || "$pname" =~ $SAFE_PROCESSES ]]; then
+            continue
+        fi
+
+        # Save snapshot if process still exists
+        if [[ -d "/proc/$pid" ]]; then
+            SNAPSHOT_TS=$(date '+%H%M%S_%N')
+            snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_${SNAPSHOT_TS}.log"
+            {
+                echo "--- Snapshot for PID $pid ---"
+                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
+                readlink "/proc/$pid/cwd" 2>/dev/null
+                readlink "/proc/$pid/exe" 2>/dev/null
+                sudo lsof -p "$pid" 2>/dev/null
+                echo "--- End Snapshot ---"
+            } >> "$snapshot_file"
+        fi
+
+        echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip [$country] Process: $pname${NC}"
+        echo "$(timestamp) [ALERT] Direct IP connection: $ip [$country] by $pname PID $pid" >> "$ALERTS_FILE"
         ((TOTAL_ALERTS++))
         ((DIRECT_IP_ALERTS++))
     fi
-done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
+done
 
     sleep $SCAN_INTERVAL
 done
