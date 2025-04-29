@@ -36,6 +36,7 @@ SAFE_USERS="root|aakore"
 
 # --- Initialize local IPs ---
 read -ra LOCAL_IPS <<< "$(hostname -I)"
+HOSTNAME=$(hostname)
 
 # Setup compressed error logging
 compressed_logfile="$TMPDIR/live-session.log.gz"
@@ -176,6 +177,7 @@ while true; do
     NETSTAT_OUTPUT=$(timeout 10 sudo netstat -npt 2>/dev/null)
     SS_OUTPUT=$(timeout 10 sudo ss -pnto 2>/dev/null)
     SS_UDP_OUTPUT=$(timeout 10 sudo ss -uap 2>/dev/null)
+    SS_ALL_OUTPUT=$(timeout 10 sudo ss -antp 2>/dev/null)
     PHP_PIDS=$(echo "$SS_OUTPUT" | grep -E '[p]hp' | awk -F 'pid=' '{print $2}' | awk -F',' '{print $1}' | sort -u)
 
     # --- Stealth connection check ----
@@ -193,7 +195,7 @@ fi
     # --- Suspicious PHP Socket Activity ---
     suspicious=""
     for ps in $PHP_PIDS; do
-        output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "$(hostname)\.[0-9]")
+        output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "${HOSTNAME}\.[0-9]")
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
     if [[ -n "$suspicious" ]]; then
@@ -232,6 +234,40 @@ if (( close_wait_count > 100 )); then
     echo -e "${RED}$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)${NC}"
     echo "$(timestamp) [ALERT] High number of CLOSE-WAIT connections detected! ($close_wait_count)" >> "$ALERTS_FILE"
     ((TOTAL_ALERTS++))
+fi
+
+# --- Alert if too many outbound SYN-SENT (connections trying to initiate but not completing) ---
+syn_sent_count=$(awk '$1 == "SYN-SENT" { count++ } END { print count+0 }' <<< "$SS_ALL_OUTPUT")
+
+if (( syn_sent_count > 50 )); then
+    echo -e "${RED}$(timestamp) [ALERT] High number of outbound SYN-SENT connections detected! ($syn_sent_count)${NC}"
+    echo "$(timestamp) [ALERT] High number of outbound SYN-SENT connections detected! ($syn_sent_count)" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+
+    # Find and log top PIDs causing SYN-SENT
+    top_syn_pids=$(awk '$1 == "SYN-SENT" && $NF ~ /pid=/ { print $NF }' <<< "$SS_ALL_OUTPUT" \
+        | sed 's/.*pid=//;s/,.*//' | sort | uniq -c | sort -rn | head -5)
+
+    if [[ -n "$top_syn_pids" ]]; then
+        echo -e "${YELLOW}$(timestamp) Top SYN-SENT PIDs:${NC}\n$top_syn_pids"
+        echo "$(timestamp) Top SYN-SENT PIDs:" >> "$ALERTS_FILE"
+        echo "$top_syn_pids" >> "$ALERTS_FILE"
+
+        # Snapshot these PIDs
+        while read -r _count pid; do
+            [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
+            SNAPSHOT_TS=$(date '+%H%M%S_%N')
+            snapshot_file="$SNAPSHOT_DIR/snapshot_synsent_pid_${pid}_${SNAPSHOT_TS}.log"
+            {
+                echo "--- Snapshot for PID $pid (SYN-SENT) ---"
+                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
+                readlink "/proc/$pid/cwd" 2>/dev/null
+                readlink "/proc/$pid/exe" 2>/dev/null
+                sudo lsof -p "$pid" 2>/dev/null
+                echo "--- End Snapshot ---"
+            } >> "$snapshot_file"
+        done <<< "$top_syn_pids"
+    fi
 fi
 
     # --- PHP Outbound DNS Query Check ---
