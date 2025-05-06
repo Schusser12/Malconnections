@@ -76,7 +76,7 @@ else
 fi
 exit 0
 ;;
-    --help)
+    -h|--help)
         show_help
         exit 0
         ;;
