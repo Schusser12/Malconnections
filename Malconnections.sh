@@ -186,7 +186,7 @@ fi
     # --- Suspicious PHP Socket Activity ---
     suspicious=""
     for ps in $PHP_PIDS; do
-        output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "$(hostname)\.[0-9]")
+        output=$(lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "$(hostname)\.[0-9]")
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
     if [[ -n "$suspicious" ]]; then
@@ -261,7 +261,7 @@ if [[ -n "$PHP_PIDS" ]]; then
             ((PHP_SUSPICIOUS++))
         fi
 
-        php_files=$(sudo lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
+        php_files=$(lsof -p "$child" 2>/dev/null | awk '$9 ~ /\.php$/ { print $9 }')
         if echo "$php_files" | grep -qE "/tmp/|/dev/shm/"; then
             echo -e "${RED}$(timestamp) [ALERT] PHP running from temp directory!${NC}"
             echo "$(timestamp) [ALERT] PHP script running from temp folder: $php_files" >> "$ALERTS_FILE"
@@ -360,7 +360,7 @@ done
             tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
             readlink "/proc/$pid/cwd" 2>/dev/null
             readlink "/proc/$pid/exe" 2>/dev/null
-            sudo lsof -p "$pid" 2>/dev/null
+            lsof -p "$pid" 2>/dev/null
             echo "--- End Snapshot ---"
         } >> "$snapshot_file"
     fi
