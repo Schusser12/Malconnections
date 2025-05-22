@@ -241,7 +241,7 @@ fi
 
     # --- Suspicious PHP Child Process Check ---
 if [[ -n "$PHP_PIDS" ]]; then
-    ALL_PHP_CHILDREN=$(pgrep -P $(echo $PHP_PIDS | tr '\n' ' ') 2>/dev/null)
+    ALL_PHP_CHILDREN=$(pgrep -P "$(echo "$PHP_PIDS" | tr '\n' ' ')" 2>/dev/null)
 
     for child in $ALL_PHP_CHILDREN; do
         [[ ! -f "/proc/$child/cmdline" ]] && continue
