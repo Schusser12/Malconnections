@@ -13,7 +13,8 @@ NC='\033[0m'
 # --- Scan crontabs for malicious encoded/backdoor signatures ---
 scan_cron_malicious() {
     local _maltext="hacker|base64|atob|eval\(|shell|_GET\[|_POST\[|preg_match\(|preg_replace\(|gzinflate\(|gzuncompress\(|str_rot13\(|md5[[:space:]]*=|\.chr\([0-9]+|filesman|shell_exec|backdoor|irc bot|function.*for.*strlen.*isset"
-    grep -rE "$_maltext" /var/spool/cron/* 2>/dev/null
+    grep -rE "$_maltext" /var/spool/cron/* 2>/dev/null \
+      | grep -v '/shell/indexer\.php'
 }
 
 # --- Help usage ---
