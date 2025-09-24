@@ -10,49 +10,17 @@ GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# --- Setup session directories ---
-TMPDIR=$(mktemp -d)
-echo "$TMPDIR" > ~/.malconnections_lastdir
-SEEN="$TMPDIR/seen"
-LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
-ALERTS_FILE="$TMPDIR/alerts-summary.log"
-SUMMARY_FILE="$TMPDIR/scan-summary.log"
-START_TIME=$(date +%s)
-SCAN_INTERVAL=2
-SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
-mkdir -p "$SNAPSHOT_DIR"
+# --- Scan crontabs for malicious encoded/backdoor signatures ---
+scan_cron_malicious() {
+    local _maltext="hacker|base64|atob|eval\(|shell|_GET\[|_POST\[|preg_match\(|preg_replace\(|gzinflate\(|gzuncompress\(|str_rot13\(|md5[[:space:]]*=|\.chr\([0-9]+|filesman|shell_exec|backdoor|irc bot|function.*for.*strlen.*isset"
+    grep -rE "$_maltext" /var/spool/cron/* 2>/dev/null
+}
 
-# --- Alert counters ---
-TOTAL_ALERTS=0
-STEALTH_ALERTS=0
-PHP_SUSPICIOUS=0
-DIRECT_IP_ALERTS=0
-STANDALONE_PHP_FILES=0
-
-# --- Suspicious tools | Safe processes | Safe users ---
-SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
-SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd|qmail-smtpd"
-SAFE_USERS="root|aakore"
-
-# --- Initialize local IPs ---
-read -ra LOCAL_IPS <<< "$(hostname -I)"
-HOSTNAME=$(hostname)
-
-# Setup compressed error logging
-compressed_logfile="$TMPDIR/live-session.log.gz"
-exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile")
-
-# Error trap for detailed crash info
-trap 'ec=$?; echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $ec)${NC}" >&2' ERR
-
-# --- Initialize trap and session ---
-trap 'cleanup; kill 0' EXIT
-trap 'kill 0; exit 130' INT TERM QUIT
-
+# --- Help usage ---
 show_help() {
     echo -e ""
     echo -e "${CYAN}╭─────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│        Malconnections.sh - Outbound Threat Scanner   │${NC}"
+    echo -e "${CYAN}│        Malconnections.sh - Outbound Threat Scanner  │${NC}"
     echo -e "${CYAN}╰─────────────────────────────────────────────────────╯${NC}"
     echo -e ""
     echo -e "${YELLOW}Usage:${NC}"
@@ -108,6 +76,49 @@ exit 0
         ;;
 esac
 
+# --- Setup session directories ---
+TMPDIR=$(mktemp -d)
+echo "$TMPDIR" > ~/.malconnections_lastdir
+SEEN="$TMPDIR/seen"
+LOGFILE="$TMPDIR/outbound-$(date '+%F_%H%M%S').log"
+ALERTS_FILE="$TMPDIR/alerts-summary.log"
+SUMMARY_FILE="$TMPDIR/scan-summary.log"
+START_TIME=$(date +%s)
+SCAN_INTERVAL=2
+SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
+mkdir -p "$SNAPSHOT_DIR"
+
+# --- Alert counters ---
+TOTAL_ALERTS=0
+STEALTH_ALERTS=0
+PHP_SUSPICIOUS=0
+DIRECT_IP_ALERTS=0
+STANDALONE_PHP_FILES=0
+
+# --- Suspicious tools | Safe processes | Safe users ---
+SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
+SAFE_PROCESSES="nginx|filebeat|telegraf|imap-login|sshd|qmail-remote|puppet|sssd_be|aakore|newrelic-daemon|service_process|rblsmtpd|qmail-smtpd"
+SAFE_USERS="root|aakore"
+
+# --- Initialize local IPs ---
+read -ra LOCAL_IPS <<< "$(hostname -I)"
+HOSTNAME=$(hostname)
+
+# Setup compressed error logging
+compressed_logfile="$TMPDIR/session-errors.log.gz"
+exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile")
+
+echo -e "${YELLOW}All stderr (error/debug) output saved in:${NC} $compressed_logfile"
+
+# Error trap for detailed crash info
+trap 'ec=$?; echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $ec)${NC}" >&2' ERR
+
+# --- Initialize trap and session ---
+trap 'cleanup; kill 0' EXIT
+trap 'kill 0; exit 130' INT TERM QUIT
+
+
+
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
     echo -e "${YELLOW}$(timestamp) Session ended at: $(date '+%F %T')${NC}"
@@ -153,6 +164,27 @@ if [[ -z "$maldet" ]]; then
     echo "$(timestamp) [INFO] No Maldet scan activity found for today or yesterday." >> "$LOGFILE"
 else
     echo "$maldet" >> "$LOGFILE"
+fi
+
+# --- One-time malicious cron scan ---
+echo -e "\n$(timestamp) [INFO] Scanning crontabs for malicious signatures..." >> "$LOGFILE"
+cron_hits=$(scan_cron_malicious)
+if [[ -n "$cron_hits" ]]; then
+    echo -e "${RED}$(timestamp) [ALERT] Suspicious cron entries detected!${NC}"
+    echo "$(timestamp) [ALERT] Suspicious cron entries detected:" >> "$ALERTS_FILE"
+    echo "$cron_hits" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+
+    # Show last-modified only for the *matching* crontabs
+    echo "$cron_hits" | awk -F: '{print $1}' | sort -u | while read -r cronfile; do
+        [[ -f "$cronfile" ]] && {
+            mod_time=$(stat -c '%y' "$cronfile")
+            echo -e "${YELLOW}$(timestamp) [INFO] Crontab $cronfile last modified: $mod_time${NC}"
+            echo "$(timestamp) [INFO] Crontab $cronfile last modified: $mod_time" >> "$ALERTS_FILE"
+        }
+    done
+else
+    echo -e "$(timestamp) [INFO] No suspicious cron entries found." >> "$LOGFILE"
 fi
 
 # --- Monitor Loop ---
