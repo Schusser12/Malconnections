@@ -10,10 +10,17 @@ GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# --- Scan crontabs for malicious encoded/backdoor signatures ---
+scan_cron_malicious() {
+    local _maltext="hacker|base64|atob|eval\(|shell|_GET\[|_POST\[|preg_match\(|preg_replace\(|gzinflate\(|gzuncompress\(|str_rot13\(|md5[[:space:]]*=|\.chr\([0-9]+|filesman|shell_exec|backdoor|irc bot|function.*for.*strlen.*isset"
+    grep -rE "$_maltext" /var/spool/cron/* 2>/dev/null
+}
+
+# --- Help usage ---
 show_help() {
     echo -e ""
     echo -e "${CYAN}╭─────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│        Malconnections.sh - Outbound Threat Scanner   │${NC}"
+    echo -e "${CYAN}│        Malconnections.sh - Outbound Threat Scanner  │${NC}"
     echo -e "${CYAN}╰─────────────────────────────────────────────────────╯${NC}"
     echo -e ""
     echo -e "${YELLOW}Usage:${NC}"
@@ -27,19 +34,6 @@ show_help() {
     echo -e "  This script monitors outbound TCP and UDP connections for suspicious"
     echo -e "  behavior, including stealth connections, PHP socket activity, direct"
     echo -e "  IP communications, and unexpected processes initiating network activity."
-    echo -e ""
-    echo -e "${YELLOW}Features:${NC}"
-    echo -e "  - Detects stealthy outbound traffic"
-    echo -e "  - Flags suspicious PHP child processes"
-    echo -e "  - Captures direct IP connections bypassing DNS"
-    echo -e "  - Takes live process snapshots for forensics"
-    echo -e "  - Summarizes session statistics and alerts"
-    echo -e ""
-    echo -e "${YELLOW}Session Files:${NC}"
-    echo -e "  Temporary session files are saved under:"
-    echo -e "    ${GREEN}/tmp/tmp.<random>/*${NC}"
-    echo -e "  Last session path saved in:"
-    echo -e "    ${GREEN}~/.malconnections_lastdir${NC}"
     echo -e ""
     echo -e "${YELLOW}Examples:${NC}"
     echo -e "  ${GREEN}$0${NC}                 Start live outbound monitoring"
@@ -76,15 +70,11 @@ else
 fi
 exit 0
 ;;
-    -h|--help)
+    --help)
         show_help
         exit 0
         ;;
 esac
-
-# --- Initialize trap and session ---
-trap 'cleanup' EXIT
-trap 'exit 130' INT TERM QUIT
 
 # --- Setup session directories ---
 TMPDIR=$(mktemp -d)
@@ -112,6 +102,20 @@ SAFE_USERS="root|aakore"
 
 # --- Initialize local IPs ---
 read -ra LOCAL_IPS <<< "$(hostname -I)"
+HOSTNAME=$(hostname)
+
+# Setup compressed error logging
+compressed_logfile="$TMPDIR/session-errors.log.gz"
+exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile")
+
+echo -e "${YELLOW}All stderr (error/debug) output saved in:${NC} $compressed_logfile"
+
+# Error trap for detailed crash info
+trap 'ec=$?; echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $ec)${NC}" >&2' ERR
+
+# --- Initialize trap and session ---
+trap 'cleanup; kill 0' EXIT
+trap 'kill 0; exit 130' INT TERM QUIT
 
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
@@ -160,15 +164,37 @@ else
     echo "$maldet" >> "$LOGFILE"
 fi
 
+# --- One-time malicious cron scan ---
+echo -e "\n$(timestamp) [INFO] Scanning crontabs for malicious signatures..." >> "$LOGFILE"
+cron_hits=$(scan_cron_malicious)
+if [[ -n "$cron_hits" ]]; then
+    echo -e "${RED}$(timestamp) [ALERT] Suspicious cron entries detected!${NC}"
+    echo "$(timestamp) [ALERT] Suspicious cron entries detected:" >> "$ALERTS_FILE"
+    echo "$cron_hits" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+
+    # Show last-modified only for the *matching* crontabs
+    echo "$cron_hits" | awk -F: '{print $1}' | sort -u | while read -r cronfile; do
+        [[ -f "$cronfile" ]] && {
+            mod_time=$(stat -c '%y' "$cronfile")
+            echo -e "${YELLOW}$(timestamp) [INFO] Crontab $cronfile last modified: $mod_time${NC}"
+            echo "$(timestamp) [INFO] Crontab $cronfile last modified: $mod_time" >> "$ALERTS_FILE"
+        }
+    done
+else
+    echo -e "$(timestamp) [INFO] No suspicious cron entries found." >> "$LOGFILE"
+fi
+
 # --- Monitor Loop ---
 while true; do
     echo -e "${GREEN}$(timestamp) [INFO] Checking outbound connections...${NC}"
     echo "$(timestamp) [INFO] Checking outbound connections..." >> "$LOGFILE"
 
     # Cache all necessary sudo outputs once
-    NETSTAT_OUTPUT=$(sudo netstat -npt 2>/dev/null)
-    SS_OUTPUT=$(sudo ss -pnto 2>/dev/null)
-    SS_UDP_OUTPUT=$(sudo ss -uap 2>/dev/null)
+    NETSTAT_OUTPUT=$(timeout 10 sudo netstat -npt 2>/dev/null)
+    SS_OUTPUT=$(timeout 10 sudo ss -pnto 2>/dev/null)
+    SS_UDP_OUTPUT=$(timeout 10 sudo ss -uap 2>/dev/null)
+    SS_ALL_OUTPUT=$(timeout 10 sudo ss -antp 2>/dev/null)
     PHP_PIDS=$(echo "$SS_OUTPUT" | grep -E '[p]hp' | awk -F 'pid=' '{print $2}' | awk -F',' '{print $1}' | sort -u)
 
     # --- Stealth connection check ----
@@ -186,7 +212,7 @@ fi
     # --- Suspicious PHP Socket Activity ---
     suspicious=""
     for ps in $PHP_PIDS; do
-        output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "$(hostname)\.[0-9]")
+        output=$(sudo lsof -p "$ps" 2>/dev/null | grep -Ei 'tcp|udp' | grep -E "${HOSTNAME}\.[0-9]")
         [[ -n "$output" ]] && suspicious+="$output"$'\n'
     done
     if [[ -n "$suspicious" ]]; then
@@ -227,6 +253,40 @@ if (( close_wait_count > 100 )); then
     ((TOTAL_ALERTS++))
 fi
 
+# --- Alert if too many outbound SYN-SENT (connections trying to initiate but not completing) ---
+syn_sent_count=$(awk '$1 == "SYN-SENT" { count++ } END { print count+0 }' <<< "$SS_ALL_OUTPUT")
+
+if (( syn_sent_count > 50 )); then
+    echo -e "${RED}$(timestamp) [ALERT] High number of outbound SYN-SENT connections detected! ($syn_sent_count)${NC}"
+    echo "$(timestamp) [ALERT] High number of outbound SYN-SENT connections detected! ($syn_sent_count)" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+
+    # Find and log top PIDs causing SYN-SENT
+    top_syn_pids=$(awk '$1 == "SYN-SENT" && $NF ~ /pid=/ { print $NF }' <<< "$SS_ALL_OUTPUT" \
+        | sed 's/.*pid=//;s/,.*//' | sort | uniq -c | sort -rn | head -5)
+
+    if [[ -n "$top_syn_pids" ]]; then
+        echo -e "${YELLOW}$(timestamp) Top SYN-SENT PIDs:${NC}\n$top_syn_pids"
+        echo "$(timestamp) Top SYN-SENT PIDs:" >> "$ALERTS_FILE"
+        echo "$top_syn_pids" >> "$ALERTS_FILE"
+
+        # Snapshot these PIDs
+        while read -r _count pid; do
+            [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
+            SNAPSHOT_TS=$(date '+%H%M%S_%N')
+            snapshot_file="$SNAPSHOT_DIR/snapshot_synsent_pid_${pid}_${SNAPSHOT_TS}.log"
+            {
+                echo "--- Snapshot for PID $pid (SYN-SENT) ---"
+                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
+                readlink "/proc/$pid/cwd" 2>/dev/null
+                readlink "/proc/$pid/exe" 2>/dev/null
+                sudo lsof -p "$pid" 2>/dev/null
+                echo "--- End Snapshot ---"
+            } >> "$snapshot_file"
+        done <<< "$top_syn_pids"
+    fi
+fi
+
     # --- PHP Outbound DNS Query Check ---
 php_dns=$(grep '[p]hp' <<< "$SS_UDP_OUTPUT" | grep ':53')
 if [[ -n "$php_dns" ]]; then
@@ -241,7 +301,7 @@ fi
 
     # --- Suspicious PHP Child Process Check ---
 if [[ -n "$PHP_PIDS" ]]; then
-    ALL_PHP_CHILDREN=$(pgrep -P "$(echo "$PHP_PIDS" | tr '\n' ' ')" 2>/dev/null)
+    ALL_PHP_CHILDREN=$(pgrep -P $(echo $PHP_PIDS | tr '\n' ' ') 2>/dev/null)
 
     for child in $ALL_PHP_CHILDREN; do
         [[ ! -f "/proc/$child/cmdline" ]] && continue
@@ -300,78 +360,96 @@ fi
     )
 
 # --- Direct IP Connection Detection ---
+declare -a suspicious_ips=()
+
 while read -r line; do
     remote=$(echo "$line" | awk '{print $5}')
     pidinfo=$(echo "$line" | awk '{print $6}')
 
     ip="${remote%:*}"
-
-    # Remove brackets first
     ip="${ip#[}"
     ip="${ip%]}"
-
-    # Normalize IPv6-mapped IPv4 to normal IPv4
     ip="${ip/#::ffff:/}"
 
-# Skip localhost connections
-if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then
-    continue
-fi
+# Skip localhost connections and private IPs
+    if [[ "$ip" == "127.0.0.1" || "$ip" == "::1" ]]; then continue; fi
+    if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then continue; fi
 
-# Skip general private ranges
-if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
-    continue
-fi
-
-# Skip if IP matches any local IP
 for localip in "${LOCAL_IPS[@]}"; do
-    if [[ "$ip" == "$localip" ]]; then
-        continue 2
-    fi
+    if [[ "$ip" == "$localip" ]]; then continue 2; fi
 done
 
-    # Now process and alert if not skipped
-    if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
-        pid="${BASH_REMATCH[1]}"
+    # Collect suspicious IPs
+    suspicious_ips+=("$ip:$pidinfo")
 
-    # Lookup country (GeoIP tagging)
-    country=$(curl -s --max-time 3 "https://ipwho.is/$ip" | grep -oP '"country_code":"\K[A-Z]+' || echo "UNK")
-    country=$(echo "$country" | tr -d '\n')
-    
-    if [[ ! -d "/proc/$pid" ]]; then
-        # PID is already gone
-        pname="[unknown]"
-        user="[unknown]"
-    else
-        pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "[unknown]")
-        user=$(ps -o user= -p "$pid" 2>/dev/null || echo "[unknown]")
-    fi
+done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
 
-    if [[ "$user" =~ $SAFE_USERS || "$pname" =~ $SAFE_PROCESSES ]]; then
+# --- Parallel GeoIP Lookups ---
+MAX_PARALLEL=10
+count=0
+
+for item in "${suspicious_ips[@]}"; do
+    ip="${item%%:*}"
+
+    if [[ -f "$TMPDIR/geoip_lookup_${ip}.json" ]]; then
         continue
     fi
 
-         # Save snapshot only if process still exists
-    if [[ -d "/proc/$pid" ]]; then
-        SNAPSHOT_TS=$(date '+%H%M%S_%N')
-        snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_${SNAPSHOT_TS}.log"
-        {
-            echo "--- Snapshot for PID $pid ---"
-            tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
-            readlink "/proc/$pid/cwd" 2>/dev/null
-            readlink "/proc/$pid/exe" 2>/dev/null
-            sudo lsof -p "$pid" 2>/dev/null
-            echo "--- End Snapshot ---"
-        } >> "$snapshot_file"
+    (
+      curl -s --max-time 3 "https://ipwho.is/$ip" > "$TMPDIR/geoip_lookup_$ip.json"
+    ) &
+    ((count++))
+    if (( count % MAX_PARALLEL == 0 )); then
+        wait
     fi
+done
 
-    echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip [$country] Process: $pname${NC}"
-    echo "$(timestamp) [ALERT] Direct IP connection: $ip [$country] by $pname PID $pid" >> "$ALERTS_FILE"
-    ((TOTAL_ALERTS++))
-    ((DIRECT_IP_ALERTS++))
-fi
+wait
 
-done < <(sudo ss -ntp 2>/dev/null | grep ESTAB)
+# --- Process Suspicious Connections ---
+for item in "${suspicious_ips[@]}"; do
+    ip="${item%%:*}"
+    pidinfo="${item#*:}"
+
+    if [[ "$pidinfo" =~ pid=([0-9]+) ]]; then
+        pid="${BASH_REMATCH[1]}"
+
+        # Read country from cached GeoIP file
+        country=$(grep -oP '"country_code":"\K[A-Z]+' "$TMPDIR/geoip_lookup_${ip}.json" 2>/dev/null || echo "UNK")
+        country=$(echo "$country" | tr -d '\n')
+
+        if [[ ! -d "/proc/$pid" ]]; then
+            pname="[unknown]"
+            user="[unknown]"
+        else
+            pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "[unknown]")
+            user=$(ps -o user= -p "$pid" 2>/dev/null || echo "[unknown]")
+        fi
+
+        if [[ "$user" =~ $SAFE_USERS || "$pname" =~ $SAFE_PROCESSES ]]; then
+            continue
+        fi
+
+        # Save snapshot if process still exists
+        if [[ -d "/proc/$pid" ]]; then
+            SNAPSHOT_TS=$(date '+%H%M%S_%N')
+            snapshot_file="$SNAPSHOT_DIR/snapshot_pid_${pid}_${SNAPSHOT_TS}.log"
+            {
+                echo "--- Snapshot for PID $pid ---"
+                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
+                readlink "/proc/$pid/cwd" 2>/dev/null
+                readlink "/proc/$pid/exe" 2>/dev/null
+                sudo lsof -p "$pid" 2>/dev/null
+                echo "--- End Snapshot ---"
+            } >> "$snapshot_file"
+        fi
+
+        echo -e "${RED}$(timestamp) [ALERT] Direct IP connection detected! IP: $ip [$country] Process: $pname${NC}"
+        echo "$(timestamp) [ALERT] Direct IP connection: $ip [$country] by $pname PID $pid" >> "$ALERTS_FILE"
+        ((TOTAL_ALERTS++))
+        ((DIRECT_IP_ALERTS++))
+    fi
+done
 
     sleep $SCAN_INTERVAL
 done
