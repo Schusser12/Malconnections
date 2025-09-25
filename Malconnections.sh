@@ -286,7 +286,7 @@ if (( syn_sent_count > 50 )); then
                 tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
                 readlink "/proc/$pid/cwd" 2>/dev/null
                 readlink "/proc/$pid/exe" 2>/dev/null
-                sudo lsof -p "$pid" 2>/dev/null
+                timeout 3s sudo lsof -p "$pid" 2>/dev/null
                 echo "--- End Snapshot ---"
             } >> "$snapshot_file"
         done <<< "$top_syn_pids"
