@@ -94,6 +94,7 @@ STEALTH_ALERTS=0
 PHP_SUSPICIOUS=0
 DIRECT_IP_ALERTS=0
 STANDALONE_PHP_FILES=0
+DELETED_PHP_SCRIPTS=0
 
 # --- Suspicious tools | Safe processes | Safe users ---
 SUSPICIOUS_TOOLS="curl|wget|perl|python|python-requests|Go-http-client|Java|libwww-perl|httpclient|http-client|aiohttp|okhttp|axios|Scrapy|bash|sh"
@@ -129,14 +130,16 @@ cleanup() {
     MINUTES=$(( (DURATION % 3600) / 60 ))
     SECONDS=$((DURATION % 60))
 
-    echo -e "\n${YELLOW}================ Session Summary ================${NC}"
-    echo -e "${YELLOW}Session Duration:   ${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
-    echo -e "${YELLOW}Total Alerts:       ${TOTAL_ALERTS}${NC}"
-    echo -e "${YELLOW}Stealth Detections: ${STEALTH_ALERTS}${NC}"
-    echo -e "${YELLOW}PHP Suspicious:     ${PHP_SUSPICIOUS}${NC}"
-    echo -e "${YELLOW}Direct IP Hits:     ${DIRECT_IP_ALERTS}${NC}"
-    echo -e "${YELLOW}Standalone PHP Files: ${STANDALONE_PHP_FILES}${NC}"
-    echo -e "${YELLOW}===============================================${NC}"
+    
+echo -e "\n${YELLOW}================ Session Summary ================"
+echo -e "${YELLOW}Session Duration:   ${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
+echo -e "${YELLOW}Total Alerts:       ${TOTAL_ALERTS}${NC}"
+echo -e "${YELLOW}Stealth Detections: ${STEALTH_ALERTS}${NC}"
+echo -e "${YELLOW}PHP Suspicious:     ${PHP_SUSPICIOUS}${NC}"
+echo -e "${YELLOW}Direct IP Hits:     ${DIRECT_IP_ALERTS}${NC}"
+echo -e "${YELLOW}Standalone PHP Files: ${STANDALONE_PHP_FILES}${NC}"
+echo -e "${YELLOW}Deleted PHP Scripts:  ${DELETED_PHP_SCRIPTS}${NC}"
+echo -e "${YELLOW}===============================================${NC}"
 
     {
         echo "================ Session Summary ================"
@@ -147,6 +150,7 @@ cleanup() {
         echo "PHP Suspicious:     ${PHP_SUSPICIOUS}"
         echo "Direct IP Hits:     ${DIRECT_IP_ALERTS}"
         echo "Standalone PHP Files: ${STANDALONE_PHP_FILES}"
+        echo "Deleted PHP Scripts: ${DELETED_PHP_SCRIPTS}"
         echo "Temporary Files:    $TMPDIR"
         echo "=================================================="
     } >> "$SUMMARY_FILE"
@@ -351,6 +355,7 @@ if [[ -n "$deleted_php" ]]; then
     echo "$(timestamp) [ALERT] PHP process running deleted script!${NC}" >> "$ALERTS_FILE"
     echo "$deleted_php" >> "$ALERTS_FILE"
     ((TOTAL_ALERTS++))
+    ((DELETED_PHP_SCRIPTS++))
 fi
 
     # --- Outbound PID Monitoring ---
