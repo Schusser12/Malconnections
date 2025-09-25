@@ -286,7 +286,7 @@ if (( syn_sent_count > 50 )); then
                 tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
                 readlink "/proc/$pid/cwd" 2>/dev/null
                 readlink "/proc/$pid/exe" 2>/dev/null
-                timeout 3s sudo lsof -p "$pid" 2>/dev/null
+                timeout 5s sudo lsof -p "$pid" 2>/dev/null
                 echo "--- End Snapshot ---"
             } >> "$snapshot_file"
         done <<< "$top_syn_pids"
@@ -352,7 +352,7 @@ fi
 deleted_php=$(sudo lsof -nP | grep php | grep deleted)
 if [[ -n "$deleted_php" ]]; then
     echo -e "${RED}$(timestamp) [ALERT] PHP process running deleted script!${NC}"
-    echo "$(timestamp) [ALERT] PHP process running deleted script!${NC}" >> "$ALERTS_FILE"
+    echo "$(timestamp) [ALERT] PHP process running deleted script!" >> "$ALERTS_FILE"
     echo "$deleted_php" >> "$ALERTS_FILE"
     ((TOTAL_ALERTS++))
     ((DELETED_PHP_SCRIPTS++))
