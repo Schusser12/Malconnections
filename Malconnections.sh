@@ -344,6 +344,15 @@ fi
         ((STANDALONE_PHP_FILES++))
     fi
 
+# --- Check for PHP processes running deleted scripts ---
+deleted_php=$(sudo lsof -nP | grep php | grep deleted)
+if [[ -n "$deleted_php" ]]; then
+    echo -e "${RED}$(timestamp) [ALERT] PHP process running deleted script!${NC}"
+    echo "$(timestamp) [ALERT] PHP process running deleted script!${NC}" >> "$ALERTS_FILE"
+    echo "$deleted_php" >> "$ALERTS_FILE"
+    ((TOTAL_ALERTS++))
+fi
+
     # --- Outbound PID Monitoring ---
     while read -r pid; do
         [[ -z "$pid" || ! -d "/proc/$pid" ]] && continue
