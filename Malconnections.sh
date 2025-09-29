@@ -197,7 +197,7 @@ fi
 echo -e "\n$(timestamp) [INFO] Scanning crontabs for malicious signatures..." >> "$LOGFILE"
 cron_hits=$(scan_cron_malicious)
 
-SAFE_CRON_PATTERNS='shell/indexer\.php|/bin/magento|setup:cron:run|wp-cron.php'
+SAFE_CRON_PATTERNS='shell/indexer\.php|/bin/magento(/| )|wp-cron.php'
 cron_hits=$(echo "$cron_hits" | grep -vE "$SAFE_CRON_PATTERNS")
 
 if [[ -n "$cron_hits" ]]; then
