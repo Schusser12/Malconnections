@@ -4,11 +4,13 @@
 timestamp() { date '+[%F %T]'; }
 
 # ---Colors ---
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+RED='\033[0;31m' YELLOW='\033[1;33m'
+GREEN='\033[0;32m' CYAN='\033[0;36m'
+
+bldred='\e[1;31m' bldgrn='\e[1;32m'
+bldylw='\e[1;33m' bldblu='\e[1;34m' bldpur='\e[1;35m'
+
+NC='\033[0m' bldwht='\e[1;37m'
 
 # --- Scan crontabs for malicious encoded/backdoor signatures ---
 scan_cron_malicious() {
@@ -24,20 +26,20 @@ show_help() {
     echo -e "${CYAN}╰─────────────────────────────────────────────────────╯${NC}"
     echo -e ""
     echo -e "${YELLOW}Usage:${NC}"
-    echo -e "  ${GREEN}$0${NC} [OPTIONS]"
-    echo -e ""
-    echo -e "${YELLOW}Options:${NC}"
-    echo -e "  ${GREEN}--help${NC}        Show this help message and exit."
-    echo -e "  ${GREEN}--report${NC}      Show alerts and session summary from the previous scan."
+    echo -e "  ${bldgrn}$0${NC}              Start live outbound monitoring (default mode)"
+    echo -e "  ${bldgrn}$0 --report${NC}     Show alerts & session summary from the previous scan"
+    echo -e "  ${bldgrn}$0 --help${NC}       Show this help message and exit"
     echo -e ""
     echo -e "${YELLOW}Description:${NC}"
-    echo -e "  This script monitors outbound TCP and UDP connections for suspicious"
-    echo -e "  behavior, including stealth connections, PHP socket activity, direct"
-    echo -e "  IP communications, and unexpected processes initiating network activity."
+    echo -e "  Monitors for outbound threats and suspicious PHP/network activity:"
+    echo -e "    Outbound direct-IP connections & rare ports"
+    echo -e "    Suspicious PHP activity (temp scripts, deleted scripts, etc.)"
+    echo -e "    Malicious cron entries and stealth network connections"
+    echo -e "    SYN flood or CLOSE-WAIT socket anomalies"
     echo -e ""
-    echo -e "${YELLOW}Examples:${NC}"
-    echo -e "  ${GREEN}$0${NC}                 Start live outbound monitoring"
-    echo -e "  ${GREEN}$0 --report${NC}         View the previous session's threat report"
+    echo -e "${YELLOW}Outputs:${NC}"
+    echo -e "    Alerts, session logs, error logs, process snapshots, and GeoIP lookups"
+    echo -e "    are saved in a unique session directory under /tmp/"
     echo -e ""
 }
 
@@ -87,6 +89,9 @@ START_TIME=$(date +%s)
 SCAN_INTERVAL=2
 SNAPSHOT_DIR="$TMPDIR/pid_snapshots"
 mkdir -p "$SNAPSHOT_DIR"
+GEOIP_DIR="$TMPDIR/geoip"
+mkdir -p "$GEOIP_DIR"
+
 
 # --- Alert counters ---
 TOTAL_ALERTS=0
@@ -109,16 +114,14 @@ HOSTNAME=$(hostname)
 compressed_logfile="$TMPDIR/session-errors.log.gz"
 exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile")
 
-echo -e "${YELLOW}All stderr (error/debug) output saved in:${NC} $compressed_logfile"
+echo -e "${YELLOW}All stderr (error/debug) output saved in:${bldwht} $compressed_logfile${NC}"
 
 # Error trap for detailed crash info
-trap 'ec=$?; echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $ec)${NC}" >&2' ERR
+trap 'echo -e "${RED}[ERROR] Line $LINENO: $(sed "${LINENO}q;d" "$0") (Exit code: $?)${NC}" >&2' ERR
 
 # --- Initialize trap and session ---
 trap 'cleanup; kill 0' EXIT
 trap 'kill 0; exit 130' INT TERM QUIT
-
-
 
 cleanup() {
     echo -e "\n${YELLOW}$(timestamp) Script interrupted. Showing alert summary...${NC}"
@@ -130,19 +133,39 @@ cleanup() {
     MINUTES=$(( (DURATION % 3600) / 60 ))
     SECONDS=$((DURATION % 60))
 
-    
-echo -e "\n${YELLOW}================ Session Summary ================"
-echo -e "${YELLOW}Session Duration:   ${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
-echo -e "${YELLOW}Total Alerts:       ${TOTAL_ALERTS}${NC}"
-echo -e "${YELLOW}Stealth Detections: ${STEALTH_ALERTS}${NC}"
-echo -e "${YELLOW}PHP Suspicious:     ${PHP_SUSPICIOUS}${NC}"
-echo -e "${YELLOW}Direct IP Hits:     ${DIRECT_IP_ALERTS}${NC}"
-echo -e "${YELLOW}Standalone PHP Files: ${STANDALONE_PHP_FILES}${NC}"
-echo -e "${YELLOW}Deleted PHP Scripts:  ${DELETED_PHP_SCRIPTS}${NC}"
-echo -e "${YELLOW}===============================================${NC}"
+echo -e "\n${bldblu}========================= Session Summary ========================="
+echo -e "${bldylw}Session Date:          ${bldwht}$(date '+%F %T')${NC}"
+echo -e "${bldylw}Hostname:              ${bldwht}$HOSTNAME${NC}"
+echo -e "${bldylw}Session Duration:      ${bldwht}${HOURS}h ${MINUTES}m ${SECONDS}s${NC}"
+echo -e "${bldylw}Total Alerts:          ${bldred}${TOTAL_ALERTS}${NC}"
+echo -e "${bldylw}Stealth Detections:    ${bldred}${STEALTH_ALERTS}${NC}"
+echo -e "${bldylw}PHP Suspicious:        ${bldred}${PHP_SUSPICIOUS}${NC}"
+echo -e "${bldylw}Direct IP Hits:        ${bldred}${DIRECT_IP_ALERTS}${NC}"
+echo -e "${bldylw}Standalone PHP Files:  ${bldred}${STANDALONE_PHP_FILES}${NC}"
+echo -e "${bldylw}Deleted PHP Scripts:   ${bldred}${DELETED_PHP_SCRIPTS}${NC}"
+echo -e "${bldylw}TCP State Summary:     ${bldwht}\n$(awk '{print "  "$0}' <<< "$tcp_connection_summary")"
+echo -e "${bldylw}Top Alerts:            ${NC}"
+if [[ -s "$ALERTS_FILE" ]]; then
+    head -5 "$ALERTS_FILE"
+    echo -e "${bldwht}(See $ALERTS_FILE for full alert details)"
+else
+    echo -e "${bldgrn}No alerts were recorded!${NC}"
+fi
+echo -e "${bldylw}Other Checks:          ${NC}"
+[[ $STANDALONE_PHP_FILES -eq 0 ]] && echo -e "  ${bldgrn}No orphan PHP files in /tmp or /dev/shm!${NC}"
+[[ $DELETED_PHP_SCRIPTS -eq 0 ]] && echo -e "  ${bldgrn}No PHP processes running deleted scripts!${NC}"
+echo -e "${bldylw}Temporary files and logs:${NC}"
+echo -e "${bldylw}  Session logs: ${bldpur}$LOGFILE${NC}"
+echo -e "${bldylw}  Error log:    ${bldpur}$compressed_logfile${NC}"
+echo -e "${bldylw}  Snapshots:    ${bldpur}$SNAPSHOT_DIR${NC}"
+echo -e "${bldylw}  Alerts:       ${bldpur}$ALERTS_FILE${NC}"
+echo -e "${bldylw}  Summary:      ${bldpur}$SUMMARY_FILE${NC}"
+echo -e "${bldylw}  GeoIP files:  ${bldpur}$GEOIP_DIR${NC}"
+echo -e "${bldblu}========================= Session End =========================${NC}"
 
     {
         echo "================ Session Summary ================"
+        echo "Hostname: $HOSTNAME"
         echo "Session Date:       $(date '+%F %T')"
         echo "Session Duration:   ${HOURS}h ${MINUTES}m ${SECONDS}s"
         echo "Total Alerts:       ${TOTAL_ALERTS}"
@@ -158,7 +181,7 @@ echo -e "${YELLOW}===============================================${NC}"
     echo -e "\n${GREEN}$(timestamp) Temporary files saved in: $TMPDIR${NC}"
 }
 
-echo "Logging to: $LOGFILE"
+echo -e "${bldwht}Logging to: $LOGFILE${NC}"
 touch "${SEEN}" "${ALERTS_FILE}"
 
 # --- Initial Maldet Report ---
@@ -173,6 +196,10 @@ fi
 # --- One-time malicious cron scan ---
 echo -e "\n$(timestamp) [INFO] Scanning crontabs for malicious signatures..." >> "$LOGFILE"
 cron_hits=$(scan_cron_malicious)
+
+SAFE_CRON_PATTERNS='shell/indexer\.php|/bin/magento|setup:cron:run|wp-cron.php'
+cron_hits=$(echo "$cron_hits" | grep -vE "$SAFE_CRON_PATTERNS")
+
 if [[ -n "$cron_hits" ]]; then
     echo -e "${RED}$(timestamp) [ALERT] Suspicious cron entries detected!${NC}"
     echo "$(timestamp) [ALERT] Suspicious cron entries detected:" >> "$ALERTS_FILE"
@@ -197,10 +224,10 @@ while true; do
     echo "$(timestamp) [INFO] Checking outbound connections..." >> "$LOGFILE"
 
     # Cache all necessary sudo outputs once
-    NETSTAT_OUTPUT=$(timeout 10 sudo netstat -npt 2>/dev/null)
-    SS_OUTPUT=$(timeout 10 sudo ss -pnto 2>/dev/null)
-    SS_UDP_OUTPUT=$(timeout 10 sudo ss -uap 2>/dev/null)
-    SS_ALL_OUTPUT=$(timeout 10 sudo ss -antp 2>/dev/null)
+    NETSTAT_OUTPUT=$(timeout 3 sudo netstat -npt 2>/dev/null)
+    SS_OUTPUT=$(timeout 3 sudo ss -pnto 2>/dev/null)
+    SS_UDP_OUTPUT=$(timeout 3 sudo ss -uap 2>/dev/null)
+    SS_ALL_OUTPUT=$(timeout 3 sudo ss -antp 2>/dev/null)
     PHP_PIDS=$(echo "$SS_OUTPUT" | grep -E '[p]hp' | awk -F 'pid=' '{print $2}' | awk -F',' '{print $1}' | sort -u)
 
     # --- Stealth connection check ----
@@ -236,7 +263,7 @@ fi
 
 # Save TCP connection states grouped by type (ESTAB, CLOSE-WAIT, LAST-ACK)
 tcp_connection_summary=$(awk '
-    ($1 == "ESTAB" || $1 == "CLOSE-WAIT" || $1 == "LAST-ACK") {
+    ($1 == "ESTAB" || $1 == "CLOSE-WAIT" || $1 == "LAST-ACK" || $1 == "SYN-SENT") {
         for (i=1; i<=NF; i++) {
             if ($i ~ /:80$|:443$/) {
                 print $1
@@ -286,7 +313,7 @@ if (( syn_sent_count > 50 )); then
                 tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null
                 readlink "/proc/$pid/cwd" 2>/dev/null
                 readlink "/proc/$pid/exe" 2>/dev/null
-                timeout 5s sudo lsof -p "$pid" 2>/dev/null
+                timeout 3s sudo lsof -p "$pid" 2>/dev/null
                 echo "--- End Snapshot ---"
             } >> "$snapshot_file"
         done <<< "$top_syn_pids"
@@ -307,7 +334,7 @@ fi
 
     # --- Suspicious PHP Child Process Check ---
 if [[ -n "$PHP_PIDS" ]]; then
-    ALL_PHP_CHILDREN=$(pgrep -P $(echo $PHP_PIDS | tr '\n' ' ') 2>/dev/null)
+    ALL_PHP_CHILDREN=$(pgrep -P "$(echo "$PHP_PIDS" | tr '\n' ' ')" 2>/dev/null)
 
     for child in $ALL_PHP_CHILDREN; do
         [[ ! -f "/proc/$child/cmdline" ]] && continue
@@ -349,7 +376,9 @@ fi
     fi
 
 # --- Check for PHP processes running deleted scripts ---
-deleted_php=$(sudo lsof -nP | grep php | grep deleted)
+deleted_php=$(sudo lsof -nP | grep php | grep deleted | \
+  grep -vE '(\.log(-[0-9]+)?|/var/log/|/html/var/log/|/tmp/\.ZendSem|/usr/bin/php \(deleted\)|/dev/shm/\.ZendSem)')
+
 if [[ -n "$deleted_php" ]]; then
     echo -e "${RED}$(timestamp) [ALERT] PHP process running deleted script!${NC}"
     echo "$(timestamp) [ALERT] PHP process running deleted script!" >> "$ALERTS_FILE"
@@ -407,12 +436,12 @@ count=0
 for item in "${suspicious_ips[@]}"; do
     ip="${item%%:*}"
 
-    if [[ -f "$TMPDIR/geoip_lookup_${ip}.json" ]]; then
+    if [[ -f "$GEOIP_DIR/geoip_lookup_${ip}.json" ]]; then
         continue
     fi
 
     (
-      curl -s --max-time 3 "https://ipwho.is/$ip" > "$TMPDIR/geoip_lookup_$ip.json"
+        curl -s --max-time 3 "https://ipwho.is/$ip" > "$GEOIP_DIR/geoip_lookup_$ip.json"
     ) &
     ((count++))
     if (( count % MAX_PARALLEL == 0 )); then
@@ -431,14 +460,14 @@ for item in "${suspicious_ips[@]}"; do
         pid="${BASH_REMATCH[1]}"
 
         # Read country from cached GeoIP file
-        country=$(grep -oP '"country_code":"\K[A-Z]+' "$TMPDIR/geoip_lookup_${ip}.json" 2>/dev/null || echo "UNK")
+        country=$(grep -oP '"country_code":"\K[A-Z]+' "$GEOIP_DIR/geoip_lookup_${ip}.json" 2>/dev/null || echo "UNK")
         country=$(echo "$country" | tr -d '\n')
 
         if [[ ! -d "/proc/$pid" ]]; then
             pname="[unknown]"
             user="[unknown]"
         else
-            pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "[unknown]")
+            pname=$(ps -p "$pid" -o args= 2>/dev/null | cut -d' ' -f1 | xargs basename || echo "[unknown]")
             user=$(ps -o user= -p "$pid" 2>/dev/null || echo "[unknown]")
         fi
 
