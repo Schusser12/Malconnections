@@ -6,10 +6,8 @@ timestamp() { date '+[%F %T]'; }
 # ---Colors ---
 RED='\033[0;31m' YELLOW='\033[1;33m'
 GREEN='\033[0;32m' CYAN='\033[0;36m'
-
 bldred='\e[1;31m' bldgrn='\e[1;32m'
 bldylw='\e[1;33m' bldblu='\e[1;34m' bldpur='\e[1;35m'
-
 NC='\033[0m' bldwht='\e[1;37m'
 
 # --- Scan crontabs for malicious encoded/backdoor signatures ---
@@ -92,7 +90,6 @@ mkdir -p "$SNAPSHOT_DIR"
 GEOIP_DIR="$TMPDIR/geoip"
 mkdir -p "$GEOIP_DIR"
 
-
 # --- Alert counters ---
 TOTAL_ALERTS=0
 STEALTH_ALERTS=0
@@ -112,8 +109,7 @@ HOSTNAME=$(hostname)
 
 # Setup compressed error logging
 compressed_logfile="$TMPDIR/session-errors.log.gz"
-exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile")
-
+exec 2> >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | gzip >> "$compressed_logfile"
 echo -e "${YELLOW}All stderr (error/debug) output saved in:${bldwht} $compressed_logfile${NC}"
 
 # Error trap for detailed crash info
@@ -435,7 +431,7 @@ count=0
 
 for item in "${suspicious_ips[@]}"; do
     ip="${item%%:*}"
-
+    
     if [[ -f "$GEOIP_DIR/geoip_lookup_${ip}.json" ]]; then
         continue
     fi
